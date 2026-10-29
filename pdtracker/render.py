@@ -72,7 +72,7 @@ def to_markdown(office: str, a: Analysis, chart_defaults: dict | None = None,
     section("Close to current", a.events_of(APPROACHING))
     section("Age-out check", a.events_of(CSPA_REVIEW))
 
-    lines += days_left_section(a, history or [a.bulletin] + ([a.previous] if a.previous else []))
+    lines += days_left_section(a)
     if a.previous is None:
         lines += ["This is the first bulletin on file, so there is nothing to compare against yet.", ""]
     else:
@@ -98,20 +98,26 @@ def _change_line(m) -> str:
             f"{cutoff_label(m.previous)} to {cutoff_label(m.current)}{who}")
 
 
-def days_left_section(a: Analysis, history: list) -> list[str]:
-    waiting = []
-    for r in a.rows:
-        w = hist.wait_for(r, FINAL_ACTION, history, a.bulletin.month)
-        if w.days_left:
-            waiting.append((w.days_left, r, w))
+def days_left_section(a: Analysis) -> list[str]:
+    waiting = sorted((r for r in a.rows if r.days_to_cutoff is not None),
+                     key=lambda r: (r.days_to_cutoff, r.client.name.lower()))
     if not waiting:
         return []
     lines = [f"## Days left for waiting clients ({len(waiting)})", "",
-             "How far the Final Action cutoff still has to move to pass each priority date, and a rough estimate "
-             "of when that could happen if the cutoff keeps moving at its recent pace.", ""]
-    for days, r, w in sorted(waiting, key=lambda t: t[0]):
-        lines.append(f"- **{r.client.name} ({r.client.category} {COUNTRIES[r.client.chargeability]}):** "
-                     f"{hist.days_words(days)} to go; {hist.wait_words(w)}")
+             "How far the Final Action cutoff still has to move to pass each priority date, and how that "
+             "cutoff changed since last month.", ""]
+    for r in waiting:
+        c = r.client
+        now = r.cutoffs[FINAL_ACTION]
+        line = (f"- **{c.name} ({c.category} {COUNTRIES[c.chargeability]}):** "
+                f"{hist.days_words(r.days_to_cutoff)} to go. Final Action cutoff ")
+        if a.previous:
+            before = a.previous.cutoff(FINAL_ACTION, c.category, c.chargeability)
+            line += (f"{cutoff_label(before)} in {_month_label(a.previous.month)}, {cutoff_label(now)} in "
+                     f"{_month_label(a.bulletin.month)} ({hist.delta_words(before, now)})")
+        else:
+            line += f"{cutoff_label(now)} in {_month_label(a.bulletin.month)}"
+        lines.append(line + ".")
     lines.append("")
     return lines
 
@@ -119,7 +125,7 @@ def days_left_section(a: Analysis, history: list) -> list[str]:
 def history_section(a: Analysis, history: list) -> list[str]:
     cells = sorted({(r.client.category, r.client.chargeability) for r in a.rows},
                    key=lambda k: (list(CATEGORIES).index(k[0]), k[1]))
-    upto = [b for b in history if b.month <= a.bulletin.month][-hist.PACE_WINDOW - 1:]
+    upto = [b for b in history if b.month <= a.bulletin.month][-hist.HISTORY_WINDOW - 1:]
     if len(upto) < 2 or not cells:
         return []
     lines = [f"## Final Action cutoffs over the last {len(upto)} bulletins (your clients' categories)", ""]

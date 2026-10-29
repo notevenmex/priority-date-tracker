@@ -69,6 +69,18 @@ class App:
                 + f'<label>Notes<textarea name="notes" rows="2">{_e(v.get("notes") or "")}</textarea></label>'
                 + "</div><div><button>Save client</button></div></form>")
 
+    def client_page(self, c: Client) -> str:
+        months = self.store.bulletin_months()
+        latest = self.store.get_bulletin(months[-1]) if months else None
+        top = ""
+        if latest and c.active:
+            a = tracker.analyze(self.store, self.s, latest)
+            row = next((r for r in a.rows if r.client.id == c.id), None)
+            if row:
+                top = dashboard.client_profile(row, a)
+        back = "<p><a href='/#profiles'>← All clients</a></p>"
+        return back + top + self.panel(f"Edit {c.name}", self.client_form(c))
+
     def home(self, message="") -> str:
         months = self.store.bulletin_months()
         latest = self.store.get_bulletin(months[-1]) if months else None
@@ -181,7 +193,7 @@ class App:
                     if len(parts) == 2 and parts[0] == "client":
                         c = self.store.get_client(parts[1])
                         if c:
-                            return 200, self.page(f"Edit {c.name}", self.panel(f"Edit {c.name}", self.client_form(c))), None
+                            return 200, self.page(c.name, self.client_page(c)), None
                     return 404, self.page("Not found", ""), None
                 if parts == ["client"] or (len(parts) == 2 and parts[0] == "client"):
                     d = {k: form.get(k, "") for k in ("name", "category", "chargeability", "priority_date",

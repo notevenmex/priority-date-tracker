@@ -13,6 +13,7 @@ from datetime import date
 from .categories import CATEGORIES, COUNTRIES, is_family
 from .evaluate import (APPROACHING, BECAME_CURRENT, CSPA_REVIEW, IS_CURRENT, NO_LONGER_CURRENT, NOT_AVAILABLE,
                        UNKNOWN, WAITING, Analysis, _rank)
+from .evaluate import status as evaluate_status
 import json
 
 from . import history as hist
@@ -140,16 +141,41 @@ nav.views .count{font-size:.75rem;font-weight:700;margin-left:6px;padding:1px 7p
 td.days{min-width:150px}
 .big{font-size:1.15rem;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
 .big.ok{color:var(--ok)}
-.queue{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
-.qcard{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:8px;min-width:0}
-.qcard .who{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
-.qcard .who b{min-width:0}
-.qcard .days-left{display:flex;align-items:baseline;gap:8px}
-.qcard .days-left .n{font-size:1.8rem;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
-.bar{height:8px;border-radius:999px;background:var(--soft);overflow:hidden}
-.bar i{display:block;height:100%;border-radius:999px;background:var(--warn)}
-.qcard dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 12px;margin:0;font-size:.85rem}
-.qcard dt{color:var(--muted)} .qcard dd{margin:0}
+.toolbar{margin:0 0 14px}
+.toolbar input[type=search]{width:100%;max-width:420px;font-size:1.05rem;padding:10px 12px}
+.profiles{display:flex;flex-direction:column;gap:20px}
+.profile{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:22px 24px;display:flex;flex-direction:column;gap:18px;min-width:0}
+.profile header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;gap:10px}
+.profile h3{font-size:1.6rem;line-height:1.2;margin:0}
+.profile h3 a{color:inherit}
+.profile header .sub{font-size:1rem}
+.pill.lg{font-size:1rem;padding:5px 14px}
+.profile dl.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:0}
+.profile dl.facts div{background:var(--soft);border-radius:10px;padding:12px 14px}
+.profile dt{font-size:.85rem;color:var(--muted);font-weight:600;letter-spacing:.02em}
+.profile dd{margin:4px 0 0;font-size:1.3rem;font-weight:600}
+.profile dd .cat{font-size:1.2rem}
+.pcharts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+@media (max-width:820px){.pcharts{grid-template-columns:1fr}}
+.pchart{border:1px solid var(--line);border-radius:12px;padding:16px 18px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.pchart h4{margin:0;font-size:1.15rem;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.cuts{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:10px 14px}
+.cut{display:flex;flex-direction:column;gap:4px}
+.cut .lbl{font-size:.9rem;color:var(--muted);font-weight:600}
+.cut .val{font-size:2.1rem;font-weight:600;line-height:1.1}
+.cut .plain{font-size:.95rem;color:var(--muted)}
+.cut.now .val{color:var(--text)}
+.cut:not(.now) .val{color:var(--muted)}
+.cuts .arrow{font-size:1.8rem;color:var(--muted)}
+.change{margin:0;font-size:1.15rem;font-weight:600;padding:8px 12px;border-radius:8px;background:var(--soft)}
+.change.fwd{background:var(--ok-bg);color:var(--ok)} .change.back{background:var(--bad-bg);color:var(--bad)}
+.flip{margin:0;font-size:1.05rem}
+.standing{margin:0;font-size:1.05rem;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px}
+.standing b{font-size:1.7rem;font-variant-numeric:tabular-nums}
+.standing.ok b{color:var(--ok)} .standing.warn b{color:var(--warn)} .standing.bad b{color:var(--bad)}
+.standing span{color:var(--muted)}
+@media (max-width:520px){.profile{padding:16px}.profile h3{font-size:1.35rem}.cut .val{font-size:1.45rem}
+  .profile dl.facts{grid-template-columns:1fr 1fr}.profile dd{font-size:1.1rem}.pchart{padding:14px}}
 .compare-bar{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:end}
 .compare-bar label{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:var(--muted);font-weight:600}
 .compare-cols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
@@ -188,6 +214,9 @@ FILTER_JS = """
     gt.forEach(function(x){x.setAttribute('aria-pressed', x===b?'true':'false')});
     document.querySelectorAll('[data-chart]').forEach(function(t){t.hidden = t.dataset.chart!==b.dataset.chartTab});});});
   apply();
+  var ps=document.getElementById('profile-search'), cards=[].slice.call(document.querySelectorAll('.profile[data-search]'));
+  if(ps) ps.addEventListener('input',function(){ var t=ps.value.toLowerCase();
+    cards.forEach(function(c){c.hidden = !!t && c.dataset.search.indexOf(t)<0;});});
   // Tabs: one view at a time, remembered in the address (#overview, #clients ...).
   var tabs=[].slice.call(document.querySelectorAll('nav.views button')), views=[].slice.call(document.querySelectorAll('.view'));
   function show(name){
@@ -384,7 +413,7 @@ def attention(a: Analysis) -> str:
             f"<div class='body'>{items}</div></section>")
 
 
-def client_table(a: Analysis, inactive: list, row_actions=None, waits: dict | None = None) -> str:
+def client_table(a: Analysis, inactive: list, row_actions=None) -> str:
     """row_actions(client) -> extra cell HTML (edit / stop tracking), or None for a read-only view."""
     events_by_client = {}
     for ev in a.events:
@@ -400,12 +429,11 @@ def client_table(a: Analysis, inactive: list, row_actions=None, waits: dict | No
         fa_cut, df_cut = r.cutoffs[FINAL_ACTION], r.cutoffs[DATES_FOR_FILING]
         chart = "Filing chart" if r.uscis_chart == DATES_FOR_FILING else "Final Action chart"
         i485 = ("<span class='pill ok'>Open</span>" if r.can_file_i485 else "<span class='pill'>Not yet</span>")
-        w = (waits or {}).get(c.id)
         if r.final_action == IS_CURRENT:
             days_cell = "<span class='big ok'>Current</span><span class='sub'>no wait under Final Action</span>"
-        elif w and w.days_left:
-            days_cell = (f"<span class='big'>{hist.days_words(w.days_left)}</span>"
-                         f"<span class='sub'>{e(hist.wait_words(w))}</span>")
+        elif r.days_to_cutoff is not None:
+            days_cell = (f"<span class='big'>{hist.days_words(r.days_to_cutoff)}</span>"
+                         f"<span class='sub'>until the Final Action cutoff passes</span>")
         else:
             days_cell = "<span class='muted small'>–</span>"
         search = " ".join([c.name, c.category, COUNTRIES[c.chargeability], c.receipt_number, c.case_type]).lower()
@@ -498,10 +526,6 @@ def bulletin_bar(a: Analysis | None, action_html: str = "") -> str:
             f"</div>{action_html}</div>")
 
 
-def waits_for(a: Analysis, history: list) -> dict:
-    return {r.client.id: hist.wait_for(r, FINAL_ACTION, history, a.bulletin.month) for r in a.rows}
-
-
 def intro(text: str) -> str:
     return f"<p class='intro'>{text}</p>"
 
@@ -525,31 +549,81 @@ def glance(a: Analysis) -> str:
     return f"<p class='glance'>{' '.join(parts)} <a href='#changes' data-goto='changes'>See every change</a></p>"
 
 
-def waiting_line(a: Analysis, waits: dict) -> str:
-    rows = [(waits[r.client.id], r) for r in a.rows if waits.get(r.client.id) and waits[r.client.id].days_left]
-    if not rows:
-        return "<p class='empty'>No one is waiting. Every active client is current under Final Action.</p>"
-    rows.sort(key=lambda t: t[0].days_left)
-    longest = max(w.days_left for w, _ in rows)
-    cards = []
-    for w, r in rows:
-        c = r.client
-        pct = max(4, round(100 * (1 - w.days_left / longest))) if longest else 100
-        df = r.cutoffs[DATES_FOR_FILING]
-        dff = ("current now" if r.dates_for_filing == IS_CURRENT else
-               f"{hist.days_words((c.priority_date - df).days)} to go" if r.dates_for_filing == WAITING else "not listed")
-        pace = (f"{'+' if w.pace >= 0 else ''}{round(w.pace)} days per month" if w.pace is not None else "not enough history yet")
-        cards.append(
-            f"<article class='qcard' data-search='{e(c.name.lower())}'><div class='who'><b>{e(c.name)}</b>"
-            f"<span class='muted small'><span class='cat'>{e(c.category)}</span> · {e(COUNTRIES[c.chargeability])}</span></div>"
-            f"<div class='days-left'><span class='n'>{w.days_left:,}</span><span class='muted'>days to go</span></div>"
-            f"<div class='bar' title='Closer to current toward the right'><i style='width:{pct}%'></i></div>"
-            f"<dl><dt>Estimate</dt><dd>{e(hist.wait_words(w))}</dd>"
-            f"<dt>Priority date</dt><dd class='mono'>{long_date(c.priority_date)}</dd>"
-            f"<dt>Cutoff now</dt><dd><span class='mono'>{bulletin_code(r.cutoffs[FINAL_ACTION])}</span> (Final Action)</dd>"
-            f"<dt>Recent pace</dt><dd>{e(pace)}</dd>"
-            f"<dt>Filing chart</dt><dd>{e(dff)}</dd></dl></article>")
-    return f"<div class='queue'>{''.join(cards)}</div>"
+CHART_TITLES = {FINAL_ACTION: "Final Action Dates", DATES_FOR_FILING: "Dates for Filing"}
+
+
+def _standing(status_now: str, pd, cut) -> str:
+    if status_now == IS_CURRENT:
+        return "<p class='standing ok'><b>Current</b> <span>the cutoff has passed this priority date</span></p>"
+    if status_now == WAITING:
+        days = (pd - cut).days
+        return (f"<p class='standing warn'><b>{hist.days_words(days)}</b> <span>still to go before the cutoff "
+                f"passes this priority date</span></p>")
+    if status_now == NOT_AVAILABLE:
+        return "<p class='standing bad'><b>Unavailable</b> <span>no visas in this category this month</span></p>"
+    return "<p class='standing'><b>Not listed</b> <span>this category isn't in the bulletin</span></p>"
+
+
+def _cut(label: str, cutoff, now: bool = False) -> str:
+    plain = ("everyone is current" if cutoff == CURRENT else "no visas available" if cutoff == UNAVAILABLE
+             else "not listed" if cutoff is None else long_date(cutoff))
+    return (f"<div class='cut{' now' if now else ''}'><span class='lbl'>{label}</span>"
+            f"<span class='val mono'>{bulletin_code(cutoff)}</span><span class='plain'>{plain}</span></div>")
+
+
+def chart_block(r, a: Analysis, chart: str) -> str:
+    """One chart in a client profile: last month's cutoff, this month's, and the change in plain words."""
+    c = r.client
+    now = r.cutoffs[chart]
+    status_now = getattr(r, chart)
+    uses = (" <span class='pill info'>USCIS filing chart this month</span>" if r.uscis_chart == chart else "")
+    this_month = _cut(f"This month · {month_label(a.bulletin.month)}", now, now=True)
+    if a.previous:
+        before = a.previous.cutoff(chart, c.category, c.chargeability)
+        _, direction = delta(before, now)
+        words = hist.delta_words(before, now)
+        status_before = evaluate_status(c.priority_date, before)
+        moved = ""
+        if status_before != status_now:
+            moved = (f"<p class='flip'>Last month this client was <b>{STATUS[status_before][0].lower()}</b>; "
+                     f"now <b>{STATUS[status_now][0].lower()}</b>.</p>")
+        pair = (_cut(f"Last month · {month_label(a.previous.month)}", before)
+                + f"<div class='arrow' aria-hidden='true'>→</div>{this_month}")
+        tone = {"up": "fwd", "down": "back"}.get(direction, "same")
+        change = f"<p class='change {tone}'>{e(words[:1].upper() + words[1:])}</p>{moved}"
+    else:
+        pair = this_month + "<div></div><div></div>"
+        change = "<p class='change same'>No earlier bulletin on file to compare with.</p>"
+    return (f"<section class='pchart'><h4>{CHART_TITLES[chart]}{uses}</h4><div class='cuts'>{pair}</div>"
+            f"{change}{_standing(status_now, c.priority_date, now)}</section>")
+
+
+def client_profile(r, a: Analysis, link: bool = False) -> str:
+    c = r.client
+    label, tone = STATUS[r.final_action]
+    sub = " · ".join(x for x in (c.case_type, c.receipt_number) if x)
+    name = f"<a href='/client/{e(c.id)}'>{e(c.name)}</a>" if link else e(c.name)
+    i485 = "Open" if r.can_file_i485 else "Not yet"
+    search = " ".join([c.name, c.category, COUNTRIES[c.chargeability], c.receipt_number]).lower()
+    return (f"<article class='profile' data-search='{e(search)}'>"
+            f"<header><div><h3>{name}</h3>{f'<span class=sub>{e(sub)}</span>' if sub else ''}</div>"
+            f"<span class='pill {tone} lg'>{label}</span></header>"
+            f"<dl class='facts'><div><dt>Category</dt><dd><span class='cat'>{e(c.category)}</span></dd></div>"
+            f"<div><dt>Country</dt><dd>{e(COUNTRIES[c.chargeability])}</dd></div>"
+            f"<div><dt>Priority date</dt><dd class='mono'>{long_date(c.priority_date)}</dd></div>"
+            f"<div><dt>I-485 filing</dt><dd>{i485}</dd></div></dl>"
+            f"<div class='pcharts'>{chart_block(r, a, FINAL_ACTION)}{chart_block(r, a, DATES_FOR_FILING)}</div>"
+            f"</article>")
+
+
+def profiles(a: Analysis, link: bool = False) -> str:
+    if not a.rows:
+        return "<p class='empty'>No active clients yet.</p>"
+    order = {WAITING: 0, IS_CURRENT: 1}
+    rows = sorted(a.rows, key=lambda r: (order.get(r.final_action, 2), r.days_to_cutoff or 0, r.client.name.lower()))
+    search = ("<div class='toolbar'><input type='search' id='profile-search' placeholder='Find a client by name' "
+              "aria-label='Find a client by name'></div>")
+    return search + f"<div class='profiles'>{''.join(client_profile(r, a, link) for r in rows)}</div>"
 
 
 def compare_view(a: Analysis, history: list) -> str:
@@ -586,7 +660,7 @@ def compare_view(a: Analysis, history: list) -> str:
 
 
 def history_table(a: Analysis, history: list) -> str:
-    bulletins = sorted(history, key=lambda b: b.month)[-hist.PACE_WINDOW - 1:]
+    bulletins = sorted(history, key=lambda b: b.month)[-hist.HISTORY_WINDOW - 1:]
     cells = sorted({(r.client.category, r.client.chargeability) for r in a.rows},
                    key=lambda k: (list(CATEGORIES).index(k[0]), GRID_COUNTRIES.index(k[1]) if k[1] in GRID_COUNTRIES else 9))
     if len(bulletins) < 2 or not cells:
@@ -609,7 +683,7 @@ def history_table(a: Analysis, history: list) -> str:
             f"<tbody>{''.join(body)}</tbody></table></div></div></section>")
 
 
-VIEWS = [("overview", "Overview"), ("clients", "Clients"), ("waiting", "Waiting line"),
+VIEWS = [("overview", "Overview"), ("clients", "Clients"), ("profiles", "Client profiles"),
          ("changes", "Bulletin changes"), ("chart", "Full bulletin")]
 
 
@@ -619,10 +693,8 @@ def dashboard(a: Analysis | None, inactive: list, row_actions=None, action_html:
     if not a:
         return "".join(parts)
     history = history or [b for b in (a.previous, a.bulletin) if b]
-    waits = waits_for(a, history)
-    n_wait = sum(1 for w in waits.values() if w.days_left)
     n_events = len({(ev.client.id, ev.kind) for ev in a.events})
-    counts = {"overview": n_events, "clients": len(a.rows), "waiting": n_wait}
+    counts = {"overview": n_events, "clients": len(a.rows), "profiles": len(a.rows)}
     nav = "".join(f"<button type='button' role='tab' data-view='{k}' aria-selected='{str(k == 'overview').lower()}'>{label}"
                   + (f"<span class='count'>{counts[k]}</span>" if k in counts else "") + "</button>" for k, label in VIEWS)
     parts.append(f"<nav class='views' role='tablist' aria-label='Dashboard sections'>{nav}</nav>")
@@ -631,10 +703,10 @@ def dashboard(a: Analysis | None, inactive: list, row_actions=None, action_html:
                     + glance(a) + summary(a) + attention(a),
         "clients": intro("<b>Every client, with how long they have left.</b> “Days left” is how far the Final Action "
                          "cutoff still has to move to pass the client's priority date. Use the buttons to filter.")
-                   + client_table(a, inactive, row_actions, waits),
-        "waiting": intro("<b>Clients still waiting, closest first.</b> Estimates assume the cutoff keeps moving at its "
-                         "recent pace. Bulletins can stall or move back, so treat them as a rough guide.")
-                   + waiting_line(a, waits),
+                   + client_table(a, inactive, row_actions),
+        "profiles": intro("<b>One page per client.</b> Each shows last month's cutoff next to this month's, "
+                          "what changed, and how far the client still has to go. Clients still waiting come first.")
+                    + profiles(a, link=row_actions is not None),
         "changes": intro("<b>How the cutoffs moved between bulletins.</b> Pick any two months to compare. "
                          "The table below shows each of your clients' categories month by month.")
                    + compare_view(a, history) + history_table(a, history),

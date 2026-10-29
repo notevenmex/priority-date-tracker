@@ -497,25 +497,10 @@ def test_real_october_to_november_changes():
 from pdtracker import dashboard, history  # noqa: E402
 
 
-def test_pace_and_days_left():
-    months = ["2026-07", "2026-08", "2026-09", "2026-10"]
-    cuts = ["01JAN01", "01FEB01", "01MAR01", "01APR01"]
-    hist_ = [bull(m, {"F3": {"MEXICO": c}}) for m, c in zip(months, cuts)]
-    pts = history.series(hist_, FINAL_ACTION, "F3", "MEXICO")
-    assert round(history.pace(pts)) == 30                       # about a month of movement per month
-    row = evaluate.analyze([client(category="F3", priority_date="2001-10-01")], hist_[-1]).rows[0]
-    w = history.wait_for(row, FINAL_ACTION, hist_, "2026-10")
-    assert w.days_left == 183 and w.estimate_month == "2027-04"
-    assert "around Apr 2027" in history.wait_words(w) and "based on only" not in history.wait_words(w)
-
-
-def test_no_estimate_when_stalled_or_reset_by_current():
-    hist_ = [bull("2026-09", {"F4": {"ROW": "01JAN08"}}), bull("2026-10", {"F4": {"ROW": "01JAN08"}})]
-    row = evaluate.analyze([client(category="F4", chargeability="Peru", priority_date="2008-06-01")], hist_[-1]).rows[0]
-    w = history.wait_for(row, FINAL_ACTION, hist_, "2026-10")
-    assert w.days_left == 152 and w.months is None
-    assert "hasn't moved forward" in history.wait_words(w)
-    assert history.pace([("2026-08", "C"), ("2026-09", date(2010, 1, 1))]) is None
+def test_series_skips_months_that_dont_list_the_cell():
+    hist_ = [bull("2026-08", {"F3": {"MEXICO": "01JAN01"}}), bull("2026-09", {"F4": {"ROW": "01JAN08"}}),
+             bull("2026-10", {"F3": {"MEXICO": "01APR01"}})]
+    assert [m for m, _ in history.series(hist_, FINAL_ACTION, "F3", "MEXICO")] == ["2026-08", "2026-10"]
 
 
 def test_delta_words():
@@ -539,9 +524,17 @@ def test_report_and_dashboard_show_days_left_and_history():
     a = evaluate.analyze([c], nov, oct_)
     md = render.to_markdown("X", a, history=[oct_, nov])
     assert "## Days left for waiting clients (1)" in md
-    assert "128 days to go; about 9 months (around Aug 2027)" in md
+    assert ("128 days to go. Final Action cutoff Jul 01, 2001 in October 2026, Jul 15, 2001 in November 2026 "
+            "(moved forward 2 weeks)") in md
+    assert "estimate" not in md.lower() and "pace" not in md.lower()
     assert "Final Action cutoffs over the last 2 bulletins" in md
     page = dashboard.dashboard(a, [], history=[oct_, nov])
-    for view in ("overview", "clients", "waiting", "changes", "chart"):
+    for view in ("overview", "clients", "profiles", "changes", "chart"):
         assert f"data-view='{view}'" in page
     assert "128 days" in page and "id='bulletin-data'" in page
+    assert "Estimate" not in page and "pace" not in page.lower()
+    # the client's profile puts last month's cutoff next to this month's, with the change in words
+    profile = page[page.index("<article class='profile'"):]
+    assert "Last month · October 2026" in profile and "01JUL01" in profile
+    assert "This month · November 2026" in profile and "15JUL01" in profile
+    assert "Moved forward 2 weeks" in profile
