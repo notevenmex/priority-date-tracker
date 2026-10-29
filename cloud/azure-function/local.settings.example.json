@@ -1,0 +1,10 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "PDTRACKER_SCHEDULE": "0 0 14 * * *",
+    "PDTRACKER_CONFIG": "../../config/myoffice.yaml",
+    "PDTRACKER_CLIENT_SECRET": ""
+  }
+}

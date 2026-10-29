@@ -1,0 +1,52 @@
+# One file per office. Copy to config/<office>.yaml and fill in.
+# Secrets never go here: they are read from the environment variables named below.
+
+office:
+  name: "Example Immigration Law"
+  timezone: America/Chicago       # used to read SharePoint dates correctly
+
+storage:
+  backend: sqlite                 # sqlite = local version on an office PC; sharepoint = cloud version
+  sqlite_path: data/priority-dates.db   # relative to this file
+
+# Only needed for the cloud version (storage.backend: sharepoint) or for email alerts.
+microsoft365:
+  tenant_id: ""
+  client_id: ""
+  client_secret_env: PDTRACKER_CLIENT_SECRET
+  hostname: example.sharepoint.com
+  site_path: /sites/Cases
+  clients_list: Priority Dates    # created by 'pdtrack provision-sharepoint'
+  bulletins_list: Visa Bulletins
+
+bulletin:
+  source: state_dept              # state_dept = fetch from travel.state.gov; manual = staff enter it
+  # If the State Department moves its pages, update these instead of the code.
+  # index_url: https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin.html
+  # page_url: https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin/{fiscal_year}/visa-bulletin-for-{month_name}-{year}.html
+  uscis_chart_default:            # used until someone records USCIS's choice for the month
+    family: dates_for_filing
+    employment: final_action
+
+alerts:
+  approaching_days: 180           # list clients within this many days of the Final Action cutoff
+  cspa_warning_days: 365          # remind when a beneficiary turns 21 within this many days
+  report_dir: reports             # a markdown report per bulletin is written here
+  email:
+    enabled: false                # needs microsoft365 settings and the Mail.Send permission
+    sender: intake@example.com
+    recipients: [attorney@example.com]
+    notify_responsible_attorney: true
+  webhook_url_env: ""             # e.g. PDTRACKER_WEBHOOK_URL for a Teams/Power Automate workflow
+
+# Map your case system's CSV export headers to tracker fields. Omit a field to use its own name.
+import:
+  columns:
+    name: Client Name
+    category: Preference Category
+    chargeability: Country of Birth
+    priority_date: Priority Date
+    receipt_number: Receipt Number
+    beneficiary_dob: Beneficiary DOB
+    responsible_email: Attorney Email
+    external_id: Matter ID

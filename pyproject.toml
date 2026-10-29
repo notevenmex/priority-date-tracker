@@ -1,0 +1,23 @@
+[project]
+name = "pdtracker"
+version = "0.1.0"
+description = "Priority date and Visa Bulletin tracker for immigration law offices"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.31", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+m365 = ["msal>=1.28"]
+dev = ["pytest>=8", "msal>=1.28"]
+
+[project.scripts]
+pdtrack = "pdtracker.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["pdtracker"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
