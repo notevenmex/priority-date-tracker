@@ -2,3 +2,4 @@ azure-functions
 requests>=2.31
 PyYAML>=6.0
 msal>=1.28
+pypdf>=4.0

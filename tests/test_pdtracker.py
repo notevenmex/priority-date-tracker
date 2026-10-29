@@ -78,18 +78,22 @@ def test_parse_garbage_is_a_clear_error():
         bulletin.parse_bulletin_html("<html><p>moved</p></html>", "2026-12")
 
 
-def test_index_links_and_url_pattern():
+def test_index_links_and_url_patterns():
     found = bulletin.months_on_index(SAMPLE, "https://travel.state.gov/x/visa-bulletin.html")
     assert found == {"2026-12": "https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin/2027/"
                                 "visa-bulletin-for-december-2026.html"}
     src = bulletin.StateDeptSource(session=object())
     assert src.url_for("2026-10").endswith("/2027/visa-bulletin-for-october-2026.html")
     assert src.url_for("2027-03").endswith("/2027/visa-bulletin-for-march-2027.html")
+    assert src.pdf_url_for("2026-11") == ("https://travel.state.gov/content/dam/visas/Bulletins/"
+                                          "visabulletin_November2026.pdf")
 
 
 class FakeResp:
-    def __init__(self, text, status=200):
-        self.text, self.status_code = text, status
+    def __init__(self, body, status=200):
+        self.content = body if isinstance(body, bytes) else body.encode()
+        self.text = body if isinstance(body, str) else ""
+        self.status_code = status
 
 
 class FakeSession:
@@ -101,12 +105,57 @@ class FakeSession:
         return FakeResp(self.pages[url]) if url in self.pages else FakeResp("", 404)
 
 
-def test_state_dept_source_latest():
-    url = ("https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin/2027/"
-           "visa-bulletin-for-december-2026.html")
-    session = FakeSession({bulletin.DEFAULT_INDEX_URL: SAMPLE, url: SAMPLE})
-    b = bulletin.StateDeptSource(session=session).latest()
-    assert b.month == "2026-12" and b.source == url
+DEC_PDF_URL = "https://travel.state.gov/content/dam/visas/Bulletins/visabulletin_December2026.pdf"
+DEC_HTML_URL = ("https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin/2027/"
+                "visa-bulletin-for-december-2026.html")
+SAMPLE_PDF = (FIXTURES / "bulletin_sample.pdf").read_bytes()
+
+
+def test_pdf_parses_the_same_as_the_web_page():
+    pdf = bulletin.parse_bulletin_pdf(SAMPLE_PDF)
+    html = bulletin.parse_bulletin_html(SAMPLE, "2026-12")
+    assert pdf.month == "2026-12"                      # read from the title
+    assert pdf.to_dict()["final_action"] == html.to_dict()["final_action"]
+    assert pdf.to_dict()["dates_for_filing"] == html.to_dict()["dates_for_filing"]
+    assert len(pdf.final_action) == 15
+
+
+def test_text_with_rows_on_one_line():
+    text = ("VISA BULLETIN FOR JANUARY 2027\nA. FINAL ACTION DATES FOR FAMILY-SPONSORED PREFERENCE CASES\n"
+            "Family- Sponsored All Chargeability Areas Except Those Listed CHINA- mainland born INDIA MEXICO PHILIPPINES\n"
+            "F1 08NOV16 08NOV16 08NOV16 22APR05 01MAR13\nF2A 01FEB24 01FEB24 01FEB24 01FEB23 01FEB24\n"
+            "A. FINAL ACTION DATES FOR EMPLOYMENT-BASED PREFERENCE CASES\n"
+            "Employment- based All Chargeability Areas Except Those Listed CHINA- mainland born INDIA MEXICO PHILIPPINES\n"
+            "1st C 15FEB23 15APR22 C C\n5th Set Aside:\nRural (20%, including NR, RR) C C C C C\n")
+    b = bulletin.parse_bulletin_text(text)
+    assert b.month == "2027-01"
+    assert b.cutoff(FINAL_ACTION, "F2A", "MEXICO") == date(2023, 2, 1)
+    assert b.cutoff(FINAL_ACTION, "EB1", "INDIA") == date(2022, 4, 15)
+    assert b.cutoff(FINAL_ACTION, "EB5R", "ROW") == CURRENT
+
+
+def test_not_a_pdf_is_a_clear_error():
+    with pytest.raises(bulletin.BulletinError, match="isn't a PDF"):
+        bulletin.parse_bulletin_pdf(b"<html>not found</html>")
+
+
+def test_state_dept_source_prefers_pdf_then_web_page():
+    session = FakeSession({DEC_PDF_URL: SAMPLE_PDF, DEC_HTML_URL: SAMPLE})
+    b = bulletin.StateDeptSource(session=session).latest(today=date(2026, 11, 18))
+    assert b.month == "2026-12" and b.source == DEC_PDF_URL
+
+    session = FakeSession({DEC_HTML_URL: SAMPLE})        # no PDF yet
+    b = bulletin.StateDeptSource(session=session).fetch("2026-12")
+    assert b.source == DEC_HTML_URL
+
+    session = FakeSession({DEC_HTML_URL: SAMPLE})
+    assert bulletin.StateDeptSource(fmt="pdf", session=session).fetch("2026-12") is None
+
+
+def test_latest_falls_back_to_this_month():
+    session = FakeSession({DEC_PDF_URL: SAMPLE_PDF})
+    b = bulletin.StateDeptSource(session=session).latest(today=date(2026, 12, 3))   # January not out yet
+    assert b.month == "2026-12"
 
 
 # evaluation
@@ -170,18 +219,20 @@ def test_check_alerts_once_per_bulletin(settings):
     store.save_client(client())
     store.save_bulletin(bull("2026-11", {"F2A": {"MEXICO": "01JAN22"}}))
     store.mark_processed("2026-11")
-    session = FakeSession({bulletin.DEFAULT_INDEX_URL: SAMPLE,
-                           "https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin/2027/"
-                           "visa-bulletin-for-december-2026.html": SAMPLE})
-    source = bulletin.StateDeptSource(session=session)
+    session = FakeSession({DEC_PDF_URL: SAMPLE_PDF})
+
+    class Src(bulletin.StateDeptSource):
+        def latest(self):
+            return super().latest(today=date(2026, 11, 18))
+    source = Src(session=session)
     note = ListNotifier()
 
-    first = tracker.check(store, source, settings, [note])
+    first = tracker.check(store, source, settings, [note], today=date(2026, 11, 18))
     assert first.new and "1 newly current" in first.subject
     assert "Garcia, Maria" in note.sent[0][1]
     assert store.statuses  # written back
 
-    again = tracker.check(store, source, settings, [note])
+    again = tracker.check(store, source, settings, [note], today=date(2026, 11, 18))
     assert not again.new and len(note.sent) == 1
 
 
@@ -305,3 +356,106 @@ def test_sharepoint_store_dates_and_statuses():
     store.mark_processed("2026-12")
     assert store.is_processed("2026-12")
     assert g.lists["Priority Dates"][c.id]["StatusMonth"] == "2026-12"
+
+
+# month-to-month changes
+
+def test_report_lists_every_change_even_without_clients(settings):
+    nov = bull("2026-11", {"EB2": {"INDIA": "01JAN13"}, "F3": {"ROW": "01JAN11"}, "F1": {"ROW": "01JAN16"}},
+               uscis_family_chart=DATES_FOR_FILING)
+    dec = bull("2026-12", {"EB2": {"INDIA": "01JAN12"}, "F3": {"ROW": "01MAR11"}, "F1": {"ROW": "01JAN16"}},
+               uscis_family_chart=FINAL_ACTION)
+    a = evaluate.analyze([client()], dec, nov)          # the one client is F2A Mexico, unaffected
+    md = render.to_markdown("X", a)
+    assert "## Everything that changed since November 2026" in md
+    assert "**EB2 India:** moved back from Jan 01, 2013 to Jan 01, 2012" in md
+    assert "**F3 All other countries:** advanced from Jan 01, 2011 to Mar 01, 2011" in md
+    assert "F1 All other countries" not in md.split("Everything that changed")[1]   # unchanged cells left out
+    assert "changed from Dates for Filing to Final Action Dates" in md
+    assert "2 cutoffs moved back" in render.subject("X", a)      # EB2 India in both charts
+    assert "<h4>" in render.to_html(md)
+
+
+def test_report_says_when_nothing_changed():
+    b = {"F1": {"ROW": "01JAN16"}}
+    md = render.to_markdown("X", evaluate.analyze([], bull("2026-12", b), bull("2026-11", b)))
+    assert "No cutoffs changed since November 2026." in md
+
+
+# reminders
+
+class RemindNotifier(ListNotifier):
+    def __init__(self):
+        super().__init__()
+        self.reminders = []
+
+    def remind(self, subject, md):
+        self.reminders.append((subject, md))
+        return "reminded"
+
+
+class NothingSource:
+    def latest(self):
+        return None
+
+
+class BrokenSource:
+    def latest(self):
+        raise bulletin.BulletinError("travel.state.gov returned HTTP 503")
+
+
+def test_reminder_when_next_bulletin_is_missing(settings):
+    store = MemoryStore()
+    note = RemindNotifier()
+    for day in (19, 20, 21, 22, 23):
+        tracker.check(store, NothingSource(), settings, [note], today=date(2026, 11, day))
+    assert len(note.reminders) == 2                     # day 20, then every 3 days
+    subject, md = note.reminders[0]
+    assert "December 2026 Visa Bulletin" in subject
+    assert "visabulletin_December2026.pdf" in md and "Enter a bulletin" in md
+
+    store.save_bulletin(bull("2026-12", {"F1": {"ROW": "C"}}))
+    tracker.check(store, NothingSource(), settings, [note], today=date(2026, 11, 26))
+    assert len(note.reminders) == 2                     # bulletin on file now
+
+
+def test_failed_download_is_reported_not_raised(settings):
+    note = RemindNotifier()
+    result = tracker.check(MemoryStore(), BrokenSource(), settings, [note], today=date(2026, 11, 20))
+    assert "HTTP 503" in result.summary and "HTTP 503" in note.reminders[0][1]
+    assert tracker.check(MemoryStore(), BrokenSource(), settings, [note],
+                         today=date(2026, 11, 5)).delivered == []
+
+
+def test_reminders_off(settings):
+    settings.reminder_day = 0
+    note = RemindNotifier()
+    tracker.check(MemoryStore(), NothingSource(), settings, [note], today=date(2026, 11, 20))
+    assert note.reminders == []
+
+
+# drop-folder inbox
+
+def test_pdf_dropped_in_folder_is_picked_up_once(tmp_path, settings):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    store = MemoryStore()
+    store.save_client(client())
+    source = bulletin.InboxSource(store, bulletin.FolderInbox(inbox), NothingSource())
+    note = RemindNotifier()
+    assert not tracker.check(store, source, settings, [note], today=date(2026, 11, 10)).new
+
+    (inbox / "visabulletin_December2026.pdf").write_bytes(SAMPLE_PDF)
+    first = tracker.check(store, source, settings, [note], today=date(2026, 11, 20))
+    assert first.new and first.month == "2026-12" and note.reminders == []
+    assert store.get_bulletin("2026-12").source == "folder:visabulletin_December2026.pdf"
+
+    (inbox / "copy.pdf").write_bytes(SAMPLE_PDF)       # same bulletin saved twice
+    assert not tracker.check(store, source, settings, [note], today=date(2026, 11, 21)).new
+
+
+def test_load_pdf_file(tmp_path):
+    p = tmp_path / "dec.pdf"
+    p.write_bytes(SAMPLE_PDF)
+    b = bulletin.load_bulletin_file(p)
+    assert b.month == "2026-12" and b.source == "file:dec.pdf"

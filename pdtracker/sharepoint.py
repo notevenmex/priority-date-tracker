@@ -174,3 +174,33 @@ def provision(graph: GraphClient, site_id: str, clients_list: str, bulletins_lis
             "displayName": name, "columns": columns, "list": {"template": "genericList"}})
         created.append(name)
     return created
+
+
+class SharePointInbox:
+    """A folder in the site's default document library where staff drop bulletin PDFs."""
+
+    def __init__(self, graph: GraphClient, site_id: str, folder: str, session=None):
+        import requests
+
+        self.graph = graph
+        self.site = site_id
+        self.folder = folder.strip("/")
+        self.session = session or requests.Session()
+
+    def pdfs(self) -> list[tuple[str, object]]:
+        from urllib.parse import quote
+        try:
+            items = self.graph.get_all(f"/sites/{self.site}/drive/root:/{quote(self.folder)}:/children")
+        except GraphError as e:
+            if e.status == 404:
+                return []
+            raise
+        out = []
+        for item in items:
+            name = item.get("name", "")
+            url = item.get("@microsoft.graph.downloadUrl")
+            if name.lower().endswith(".pdf") and url:
+                # The download URL is pre-authenticated and short-lived; fetch it only when needed.
+                out.append((f"sharepoint:{name}:{item.get('eTag', '')}",
+                            lambda url=url: self.session.get(url, timeout=60).content))
+        return out

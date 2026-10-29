@@ -1,7 +1,9 @@
 """Cloud version: an Azure Function in the office's own Azure subscription.
 
-- A daily timer checks travel.state.gov for a new bulletin, compares it with the last one,
-  updates each client's status in the SharePoint list and emails alerts once per bulletin.
+- A daily timer looks for a new bulletin (a PDF staff dropped in the SharePoint folder, else the
+  PDF or web page on travel.state.gov), compares it with the last one, updates each client's
+  status in the SharePoint list and emails alerts once per bulletin. If next month's bulletin
+  still isn't in by the reminder day, it emails staff asking them to add it.
 - HTTP endpoints (function key required) let staff or a Power Automate flow run a check,
   read the current status, or post a bulletin entered by hand.
 
@@ -15,6 +17,7 @@ import logging
 import azure.functions as func
 
 from pdtracker import config, tracker
+from pdtracker.bulletin import BulletinError, parse_bulletin_pdf
 from pdtracker.models import Bulletin
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
@@ -29,7 +32,7 @@ def _setup():
 
 def _run(force: bool = False, month: str | None = None) -> tracker.CheckResult:
     s, graph, store = _setup()
-    source = tracker.source_for(s, store)
+    source = tracker.source_for(s, store, graph)
     # No local disk worth keeping in the cloud, so no report files; email and webhook only.
     return tracker.check(store, source, s, tracker.notifiers_for(s, graph, write_files=False),
                          month=month, force=force)
@@ -67,11 +70,24 @@ def status(req: func.HttpRequest) -> func.HttpResponse:
 
 @app.route(route="bulletin", methods=["POST"])
 def save_bulletin(req: func.HttpRequest) -> func.HttpResponse:
-    """Body: the same JSON 'pdtrack bulletin template' produces."""
+    """Body: the bulletin PDF (Content-Type: application/pdf), or the JSON 'pdtrack bulletin template' produces.
+
+    A PDF is checked right away (compared with last month, alerts sent). Add ?month=YYYY-MM if the
+    month can't be read from the PDF.
+    """
     try:
-        b = Bulletin.from_dict(req.get_json())
-    except (ValueError, KeyError) as e:
+        if req.headers.get("Content-Type", "").startswith("application/pdf"):
+            b = parse_bulletin_pdf(req.get_body(), req.params.get("month"), source="upload")
+        else:
+            b = Bulletin.from_dict(req.get_json())
+    except (ValueError, KeyError, BulletinError) as e:
         return func.HttpResponse(json.dumps({"error": str(e)}), status_code=400, mimetype="application/json")
-    _, _, store = _setup()
+    s, graph, store = _setup()
+    stored = store.get_bulletin(b.month)
+    if stored:
+        b.uscis_family_chart = b.uscis_family_chart or stored.uscis_family_chart
+        b.uscis_employment_chart = b.uscis_employment_chart or stored.uscis_employment_chart
     store.save_bulletin(b)
-    return func.HttpResponse(json.dumps({"saved": b.month}), mimetype="application/json")
+    result = tracker.check(store, tracker.StoredSource(store), s,
+                           tracker.notifiers_for(s, graph, write_files=False), month=b.month)
+    return func.HttpResponse(json.dumps({"saved": b.month, "summary": result.summary}), mimetype="application/json")

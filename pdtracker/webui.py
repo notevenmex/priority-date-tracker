@@ -110,6 +110,12 @@ class App:
                 f"action='/client/{_e(c.id)}/toggle'>{self._hidden()}<button class='plain'>{toggle}</button></form></td></tr>")
         bulletin_note = (f"Compared against the <b>{_e(latest.month)}</b> bulletin." if latest
                          else "No bulletin on file yet. Check for one or enter it by hand.")
+        nxt = tracker.next_month(date.today())
+        if (self.s.reminder_day and date.today().day >= self.s.reminder_day
+                and nxt not in self.store.bulletin_months()):
+            wanted = nxt
+            message = message or (f"The {wanted} Visa Bulletin isn't in yet. Click 'Check for a new bulletin', "
+                                  "or download the PDF from travel.state.gov and upload it on 'Enter a bulletin'.")
         check = (f"<form class='inline' method='post' action='/check'>{self._hidden()}"
                  "<button>Check for a new bulletin</button></form>")
         table = f"<div class='wrap'><table>{head}{''.join(body)}</table></div>" if body else "<p>No clients yet.</p>"
@@ -124,7 +130,12 @@ class App:
         note = ("Editing the saved bulletin." if current else
                 f"Prefilled from {base.month}; change only the cells that moved." if base else "Blank form.")
         countries = ["ROW", "CHINA", "INDIA", "MEXICO", "PHILIPPINES"]
-        parts = [f"<form method='get' action='/bulletin'><label>Month <input name='month' value='{month}' "
+        upload = (f"<h2>Upload the bulletin PDF</h2><form method='post' action='/bulletin/pdf' "
+                  f"enctype='multipart/form-data'>{self._hidden()}<input type='file' name='pdf' accept='application/pdf' "
+                  "required> <button>Upload and check</button></form><p class='note'>The month is read from the PDF. "
+                  "After upload the tracker compares it with last month and sends the usual alerts.</p>"
+                  "<h2>Or type the dates</h2>")
+        parts = [upload, f"<form method='get' action='/bulletin'><label>Month <input name='month' value='{month}' "
                  f"pattern='\\d{{4}}-\\d{{2}}'></label> <button class='plain'>Open</button></form>",
                  f"<p class='note'>{note} Enter dates as YYYY-MM-DD, or C for current, U for unavailable. "
                  "Leave blank if the bulletin has no entry.</p>",
@@ -209,6 +220,21 @@ class App:
                         c.active = not c.active
                         self.store.save_client(c)
                     return 303, "", "/"
+                if parts == ["bulletin", "pdf"]:
+                    from .bulletin import parse_bulletin_pdf
+                    upload = form.get("pdf")
+                    if not isinstance(upload, tuple):
+                        raise ValueError("Choose a PDF file first.")
+                    name, data = upload
+                    b = parse_bulletin_pdf(data, source=f"upload:{name}")
+                    stored = self.store.get_bulletin(b.month)
+                    if stored:
+                        b.uscis_family_chart = stored.uscis_family_chart
+                        b.uscis_employment_chart = stored.uscis_employment_chart
+                    self.store.save_bulletin(b)
+                    result = tracker.check(self.store, tracker.StoredSource(self.store), self.s,
+                                           tracker.notifiers_for(self.s), month=b.month)
+                    return 303, "", f"/?msg=Read the {b.month} bulletin from {name}. {result.summary}"
                 if parts == ["bulletin"]:
                     month = self.save_bulletin(form)
                     return 303, "", f"/bulletin?month={month}&msg=Saved the {month} bulletin"
@@ -219,6 +245,23 @@ class App:
                 return 404, self.page("Not found", ""), None
             except Exception as e:      # show the problem on the page instead of a dropped connection
                 return 400, self.page("Couldn't do that", f"<p>{_e(e)}</p><p><a href='javascript:history.back()'>Go back</a></p>"), None
+
+
+def _multipart(content_type: str, body: bytes) -> dict:
+    """Text fields as strings, files as (filename, bytes)."""
+    from email.parser import BytesParser
+    from email.policy import HTTP
+
+    msg = BytesParser(policy=HTTP).parsebytes(f"Content-Type: {content_type}\r\n\r\n".encode() + body)
+    form = {}
+    for part in msg.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        filename = part.get_filename()
+        data = part.get_payload(decode=True) or b""
+        form[name] = (filename, data) if filename is not None else data.decode("utf-8", "replace")
+    return form
 
 
 def make_handler(app: App, port: int):
@@ -232,7 +275,15 @@ def make_handler(app: App, port: int):
             form = {}
             if method == "POST":
                 length = int(self.headers.get("Content-Length") or 0)
-                form = {k: v[0] for k, v in parse_qs(self.rfile.read(length).decode(), keep_blank_values=True).items()}
+                if length > 20_000_000:
+                    self.send_error(413)
+                    return
+                body = self.rfile.read(length)
+                ctype = self.headers.get("Content-Type", "")
+                if ctype.startswith("multipart/form-data"):
+                    form = _multipart(ctype, body)
+                else:
+                    form = {k: v[0] for k, v in parse_qs(body.decode(), keep_blank_values=True).items()}
             status, body, redirect = app.handle(method, self.path, form)
             if redirect:
                 from urllib.parse import quote

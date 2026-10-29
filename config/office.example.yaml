@@ -18,11 +18,17 @@ microsoft365:
   site_path: /sites/Cases
   clients_list: Priority Dates    # created by 'pdtrack provision-sharepoint'
   bulletins_list: Visa Bulletins
+  bulletin_folder: Visa Bulletin PDFs   # cloud: staff can drop the bulletin PDF here (in the site's Documents)
 
 bulletin:
-  source: state_dept              # state_dept = fetch from travel.state.gov; manual = staff enter it
+  source: state_dept              # state_dept = fetch from travel.state.gov; manual = staff add it
+  format: auto                    # pdf, html, or auto (the PDF first, then the web page)
+  inbox_dir: bulletin-inbox       # local: staff can drop the bulletin PDF in this folder (relative to this file)
+  reminder_day: 20                # if next month's bulletin isn't in by this day, ask staff for it
+  reminder_every_days: 3          # and repeat this often until it is
   # If the State Department moves its pages, update these instead of the code.
   # index_url: https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin.html
+  # pdf_url: https://travel.state.gov/content/dam/visas/Bulletins/visabulletin_{MonthName}{year}.pdf
   # page_url: https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin/{fiscal_year}/visa-bulletin-for-{month_name}-{year}.html
   uscis_chart_default:            # used until someone records USCIS's choice for the month
     family: dates_for_filing

@@ -11,6 +11,17 @@ from .evaluate import APPROACHING, BECAME_CURRENT, CSPA_REVIEW, NO_LONGER_CURREN
 ALERT_KINDS = (BECAME_CURRENT, NO_LONGER_CURRENT, CSPA_REVIEW)
 
 
+class ConsoleNotifier:
+    """Prints reminders when the check runs by hand from the command line."""
+
+    def send(self, subject: str, markdown: str, analysis: Analysis) -> str:
+        return ""
+
+    def remind(self, subject: str, markdown: str) -> str:
+        print(f"\n{subject}\n\n{markdown}\n")
+        return ""
+
+
 class FileNotifier:
     def __init__(self, folder: Path):
         self.folder = folder
@@ -20,6 +31,9 @@ class FileNotifier:
         path = self.folder / f"visa-bulletin-{analysis.bulletin.month}.md"
         path.write_text(markdown)
         return f"wrote {path}"
+
+    def remind(self, subject: str, markdown: str) -> str:
+        return ""        # reminders need to reach a person; a file nobody opens doesn't
 
 
 class EmailNotifier:
@@ -48,6 +62,10 @@ class EmailNotifier:
                 sent += 1
         return f"emailed {sent} people"
 
+    def remind(self, subject: str, markdown: str) -> str:
+        self.graph.send_mail(self.sender, self.recipients, subject, render.to_html(markdown))
+        return f"emailed a reminder to {len(self.recipients)} people"
+
 
 class WebhookNotifier:
     """POSTs a small JSON message. Works with a Teams or Power Automate workflow trigger and Slack."""
@@ -59,8 +77,16 @@ class WebhookNotifier:
         self.session = session or requests.Session()
 
     def send(self, subject: str, markdown: str, analysis: Analysis) -> str:
-        alerts = [e for e in analysis.events if e.kind in ALERT_KINDS]
-        text = subject + ("\n" + "\n".join(f"- {e.client.name}: {e.detail}" for e in alerts) if alerts else "")
+        alerts = [f"- {e.client.name}: {e.detail}" for e in analysis.events if e.kind in ALERT_KINDS]
+        alerts += [f"- Moved back: {m.category} {m.country} ({m.chart.replace('_', ' ')}) "
+                   f"{render.cutoff_label(m.previous)} to {render.cutoff_label(m.current)}"
+                   for m in analysis.retrogressions]
+        text = subject + ("\n" + "\n".join(alerts) if alerts else "")
         self.session.post(self.url, json={"text": text, "title": subject,
                                           "month": analysis.bulletin.month}, timeout=30).raise_for_status()
         return "posted to webhook"
+
+    def remind(self, subject: str, markdown: str) -> str:
+        self.session.post(self.url, json={"text": f"{subject}\n{markdown}", "title": subject},
+                          timeout=30).raise_for_status()
+        return "posted a reminder to webhook"

@@ -1,6 +1,6 @@
 # Priority Date Tracker
 
-Tracks each client's place in the green card line against the monthly Visa Bulletin, for any immigration law office. It stores each client's preference category, chargeability country and priority date, reads every new bulletin (both the Final Action and Dates for Filing charts), and tells the office when a client becomes current, when a cutoff moves backward, who is getting close, and which beneficiaries are about to turn 21.
+Tracks each client's place in the green card line against the monthly Visa Bulletin, for any immigration law office. It stores each client's preference category, chargeability country and priority date, reads every new bulletin (both the Final Action and Dates for Filing charts), and tells the office when a client becomes current, when a cutoff moves backward, who is getting close, and which beneficiaries are about to turn 21. Each report also lists every cutoff that changed since the previous month, whether or not a client is affected.
 
 Everything office-specific lives in one YAML config file per office. Nothing is hardcoded to a person, tenant or folder.
 
@@ -32,7 +32,7 @@ pdtrack -c config/myoffice.yaml serve                  # opens the web page
 
 Both versions take manual input, and both are built around three plug-in points so automatic sources can be added without touching the core:
 
-- **Bulletin source** (`pdtracker/bulletin.py`): `state_dept` downloads and parses the bulletin from travel.state.gov; `manual` uses a bulletin staff typed into the web form, a JSON/YAML file, or the cloud `/api/bulletin` endpoint. If the State Department changes its page, manual entry still works and the URLs can be changed in config.
+- **Bulletin source** (`pdtracker/bulletin.py`): `state_dept` downloads the bulletin PDF from travel.state.gov (falling back to the web page) and reads both charts from it. Staff can also add the PDF themselves: upload it on the local web page, drop it in a watched folder (a local folder or a SharePoint folder), run `pdtrack bulletin load file.pdf`, or post it to the cloud `/api/bulletin` endpoint. If next month's bulletin isn't in by the reminder day (the 20th by default), the tracker asks staff for it. If the State Department moves its files, the URLs are in config.
 - **Client feed** (`pdtracker/importers.py`): `pdtrack import` reads a CSV export from any case management system, using a column mapping in config. A direct sync from a database or API is a small class with a `rows()` method.
 - **Store** (`pdtracker/stores.py`): SQLite and SharePoint lists today. Pointing the tracker at a case system's own database means writing one more store with the same nine methods.
 

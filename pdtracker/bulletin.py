@@ -21,6 +21,8 @@ from .models import DATES_FOR_FILING, FINAL_ACTION, Bulletin, month_key, parse_c
 DEFAULT_INDEX_URL = "https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin.html"
 DEFAULT_PAGE_URL = ("https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin/"
                     "{fiscal_year}/visa-bulletin-for-{month_name}-{year}.html")
+DEFAULT_PDF_URL = "https://travel.state.gov/content/dam/visas/Bulletins/visabulletin_{MonthName}{year}.pdf"
+FORMATS = ("pdf", "html", "auto")
 
 
 class BulletinError(RuntimeError):
@@ -183,7 +185,7 @@ def parse_bulletin_html(html: str, month: str, source: str = "") -> Bulletin:
 
     if not bulletin.final_action:
         raise BulletinError("No Final Action table found on the bulletin page. The page layout may have changed; "
-                            "enter this month's dates by hand with 'pdtrack bulletin template'.")
+                            "upload the bulletin PDF or enter this month's dates by hand.")
     return bulletin
 
 
@@ -199,51 +201,175 @@ def months_on_index(html: str, base_url: str) -> dict[str, str]:
     return found
 
 
+
+# PDF parsing. Text extraction from the bulletin PDF can put a table row on one line or
+# each cell on its own line, so this works on the stream of words rather than on lines.
+
+_CUTOFF_TOKEN = re.compile(r"^(C|U|\d{2}[A-Z]{3}\d{2})$")
+_SECTIONS = [
+    (re.compile(r"FINAL\s+ACTION\s+DATES\s+FOR\s+FAMILY", re.I), "family", FINAL_ACTION),
+    (re.compile(r"DATES\s+FOR\s+FILING\s+(?:OF\s+)?FAMILY", re.I), "family", DATES_FOR_FILING),
+    (re.compile(r"FINAL\s+ACTION\s+DATES\s+FOR\s+EMPLOYMENT", re.I), "employment", FINAL_ACTION),
+    (re.compile(r"DATES\s+FOR\s+FILING\s+(?:OF\s+)?EMPLOYMENT", re.I), "employment", DATES_FOR_FILING),
+]
+_DEFAULT_COLUMNS = ["ROW", "CHINA", "INDIA", "MEXICO", "PHILIPPINES"]
+_TITLE = re.compile(r"VISA\s+BULLETIN\s+FOR\s+([A-Z]+)\s+(\d{4})", re.I)
+
+
+def month_from_text(text: str) -> str | None:
+    names = {name.lower(): i for i, name in enumerate(calendar.month_name) if name}
+    m = _TITLE.search(text[:5000])
+    if m and m[1].lower() in names:
+        return f"{int(m[2]):04d}-{names[m[1].lower()]:02d}"
+    return None
+
+
+def _columns_from_header(text: str) -> list[str]:
+    """Column order from the header words before the first row; standard order if unclear."""
+    found = []
+    for pattern, col in (("ALL CHARGEABILITY", "ROW"), ("CHINA", "CHINA"), ("INDIA", "INDIA"),
+                         ("MEXICO", "MEXICO"), ("PHILIPPINES", "PHILIPPINES"), ("EL SALVADOR", "ESGH")):
+        i = " ".join(text.upper().split()).find(pattern)
+        if i >= 0:
+            found.append((i, col))
+    cols = [c for _, c in sorted(found)]
+    return cols if len(cols) >= 5 else list(_DEFAULT_COLUMNS)
+
+
+def _parse_rows(text: str, kind: str) -> dict:
+    tokens = text.split()
+    first_value = next((i for i, t in enumerate(tokens) if _CUTOFF_TOKEN.match(t)), len(tokens))
+    columns = _columns_from_header(" ".join(tokens[:first_value]))
+    width = len(columns)
+    out, label, i = {}, [], 0
+    while i < len(tokens):
+        if not _CUTOFF_TOKEN.match(tokens[i]):
+            label.append(tokens[i])
+            i += 1
+            continue
+        run = []
+        while i < len(tokens) and _CUTOFF_TOKEN.match(tokens[i]):
+            run.append(tokens[i])
+            i += 1
+        if len(run) >= width and label:
+            # The label is the end of the words before the values: try the shortest tail that names a row.
+            cat = next((c for n in range(1, min(len(label), 14) + 1)
+                        if (c := _row_category(" ".join(label[-n:]), kind))), None)
+            if cat and cat not in out:
+                out[cat] = {col: parse_cutoff(v) for col, v in zip(columns, run[:width])}
+        label = []
+    return out
+
+
+def parse_bulletin_text(text: str, month: str | None = None, source: str = "") -> Bulletin:
+    month = month or month_from_text(text)
+    if not month:
+        raise BulletinError("Couldn't tell which month this bulletin is for. Give the month explicitly.")
+    bulletin = Bulletin(month=month, source=source)
+    marks = sorted((m.start(), kind, chart) for pattern, kind, chart in _SECTIONS
+                   for m in [pattern.search(text)] if m)
+    for n, (start, kind, chart) in enumerate(marks):
+        end = marks[n + 1][0] if n + 1 < len(marks) else len(text)
+        # Skip the heading line itself so its words don't end up in a row label.
+        body = text[start:end].split("\n", 1)[-1]
+        rows = _parse_rows(body, kind)
+        target = bulletin.chart(chart)
+        for cat, values in rows.items():
+            target.setdefault(cat, values)
+    if not bulletin.final_action:
+        raise BulletinError("No Final Action table found in the bulletin text. The layout may have changed; "
+                            "enter this month's dates by hand.")
+    return bulletin
+
+
+def pdf_text(data: bytes) -> str:
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
+    if not data.startswith(b"%PDF"):
+        raise BulletinError("That file isn't a PDF.")
+    return "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(data)).pages)
+
+
+def parse_bulletin_pdf(data: bytes, month: str | None = None, source: str = "") -> Bulletin:
+    return parse_bulletin_text(pdf_text(data), month, source)
+
+
 # Sources
 
 class StateDeptSource:
-    """Fetch bulletins from travel.state.gov. Pass a requests-like session for testing."""
+    """Fetch bulletins from travel.state.gov, as the PDF, the web page, or PDF then web page.
 
-    def __init__(self, index_url: str = DEFAULT_INDEX_URL, page_url: str = DEFAULT_PAGE_URL, session=None):
+    Pass a requests-like session for testing.
+    """
+
+    def __init__(self, index_url: str = DEFAULT_INDEX_URL, page_url: str = DEFAULT_PAGE_URL,
+                 pdf_url: str = DEFAULT_PDF_URL, fmt: str = "auto", session=None):
         import requests
 
+        if fmt not in FORMATS:
+            raise ValueError(f"bulletin format must be one of {FORMATS}")
         self.index_url = index_url
         self.page_url = page_url
+        self.pdf_url = pdf_url
+        self.fmt = fmt
         self.session = session or requests.Session()
 
-    def _get(self, url: str) -> str:
+    def _get(self, url: str):
         resp = self.session.get(url, timeout=60, headers={"User-Agent": "pdtracker (law office priority date tracker)"})
         if resp.status_code == 404:
-            return ""
+            return None
         if resp.status_code >= 400:
             raise BulletinError(f"{url} returned HTTP {resp.status_code}")
-        return resp.text
+        return resp
+
+    @staticmethod
+    def _parts(month: str) -> dict:
+        year, mon = map(int, month_key(month).split("-"))
+        name = calendar.month_name[mon]
+        return {"fiscal_year": year + 1 if mon >= 10 else year, "year": year,
+                "month_name": name.lower(), "MonthName": name}
 
     def url_for(self, month: str) -> str:
-        year, mon = map(int, month_key(month).split("-"))
-        fiscal_year = year + 1 if mon >= 10 else year
-        return self.page_url.format(fiscal_year=fiscal_year, year=year,
-                                    month_name=calendar.month_name[mon].lower())
+        return self.page_url.format(**self._parts(month))
+
+    def pdf_url_for(self, month: str) -> str:
+        return self.pdf_url.format(**self._parts(month))
 
     def available(self) -> dict[str, str]:
-        return months_on_index(self._get(self.index_url), self.index_url)
+        resp = self._get(self.index_url)
+        return months_on_index(resp.text, self.index_url) if resp else {}
+
+    def _fetch_pdf(self, month: str) -> Bulletin | None:
+        url = self.pdf_url_for(month)
+        resp = self._get(url)
+        if not resp or not resp.content.startswith(b"%PDF"):
+            return None          # not published yet (some servers answer a missing file with an HTML page)
+        return parse_bulletin_pdf(resp.content, month, source=url)
+
+    def _fetch_html(self, month: str, url: str | None = None) -> Bulletin | None:
+        url = url or self.url_for(month)
+        resp = self._get(url)
+        return parse_bulletin_html(resp.text, month, source=url) if resp else None
 
     def fetch(self, month: str) -> Bulletin | None:
         month = month_key(month)
-        url = self.available().get(month) or self.url_for(month)
-        html = self._get(url)
-        return parse_bulletin_html(html, month, source=url) if html else None
+        if self.fmt in ("pdf", "auto"):
+            try:
+                b = self._fetch_pdf(month)
+                if b or self.fmt == "pdf":
+                    return b
+            except BulletinError:
+                if self.fmt == "pdf":
+                    raise
+        return self._fetch_html(month)
 
-    def latest(self) -> Bulletin | None:
-        available = self.available()
-        if not available:
-            # Index layout changed: try next month, then this month, by URL pattern.
-            today = date.today()
-            nxt = f"{today.year + (today.month == 12):04d}-{today.month % 12 + 1:02d}"
-            return self.fetch(nxt) or self.fetch(f"{today:%Y-%m}")
-        month = max(available)
-        html = self._get(available[month])
-        return parse_bulletin_html(html, month, source=available[month]) if html else None
+    def latest(self, today: date | None = None) -> Bulletin | None:
+        """The newest bulletin: next month's if it's out (it usually appears mid-month), else this month's."""
+        today = today or date.today()
+        nxt = f"{today.year + (today.month == 12):04d}-{today.month % 12 + 1:02d}"
+        return self.fetch(nxt) or self.fetch(f"{today:%Y-%m}")
 
 
 class StoredSource:
@@ -260,9 +386,63 @@ class StoredSource:
         return self.store.get_bulletin(month_key(month))
 
 
-def load_bulletin_file(path: str | Path) -> Bulletin:
-    text = Path(path).read_text()
-    if str(path).endswith((".yaml", ".yml")):
+def _same_dates(a: Bulletin, b: Bulletin) -> bool:
+    da, db = a.to_dict(), b.to_dict()
+    return all(da[c] == db[c] for c in (FINAL_ACTION, DATES_FOR_FILING))
+
+
+class FolderInbox:
+    """A local folder where staff drop bulletin PDFs."""
+
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+
+    def pdfs(self) -> list[tuple[str, object]]:
+        if not self.path.is_dir():
+            return []
+        return [(f"folder:{p.name}", p.read_bytes) for p in sorted(self.path.glob("*.pdf"))]
+
+
+class InboxSource:
+    """Use bulletin PDFs staff dropped in an inbox (a local folder or a SharePoint folder) first,
+    then fall back to another source, such as the State Department site."""
+
+    def __init__(self, store, inbox, fallback=None):
+        self.store = store
+        self.inbox = inbox
+        self.fallback = fallback
+
+    def _from_inbox(self) -> Bulletin | None:
+        known = {b.source for b in (self.store.get_bulletin(m) for m in self.store.bulletin_months()) if b}
+        newest = None
+        for name, load in self.inbox.pdfs():
+            if name in known:
+                continue
+            b = parse_bulletin_pdf(load(), source=name)
+            stored = self.store.get_bulletin(b.month)
+            if stored and self.store.is_processed(b.month) and _same_dates(stored, b):
+                continue     # a copy of a bulletin already checked
+            if newest and newest.month >= b.month:
+                continue
+            newest = b
+        return newest
+
+    def latest(self) -> Bulletin | None:
+        b = self._from_inbox()
+        if b:
+            return b
+        return self.fallback.latest() if self.fallback else None
+
+    def fetch(self, month: str) -> Bulletin | None:
+        return self.fallback.fetch(month) if self.fallback else self.store.get_bulletin(month)
+
+
+def load_bulletin_file(path: str | Path, month: str | None = None) -> Bulletin:
+    path = Path(path)
+    if path.suffix.lower() == ".pdf":
+        return parse_bulletin_pdf(path.read_bytes(), month, source=f"file:{path.name}")
+    text = path.read_text()
+    if path.suffix.lower() in (".yaml", ".yml"):
         import yaml
         data = yaml.safe_load(text)
     else:

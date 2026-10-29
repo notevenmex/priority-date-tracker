@@ -79,7 +79,7 @@ def cmd_export(s, a):
 
 def cmd_bulletin_fetch(s, a):
     store = _store(s)
-    source = tracker.StateDeptSource(s.index_url, s.page_url)
+    source = tracker.StateDeptSource(s.index_url, s.page_url, s.pdf_url, a.format or s.bulletin_format)
     b = source.fetch(a.month) if a.month else source.latest()
     if not b:
         raise BulletinError("No bulletin found for that month yet.")
@@ -94,9 +94,10 @@ def cmd_bulletin_template(s, a):
 
 
 def cmd_bulletin_load(s, a):
-    b = load_bulletin_file(a.file)
+    b = load_bulletin_file(a.file, a.month)
     _store(s).save_bulletin(b)
-    print(f"Saved the {b.month} bulletin from {a.file}")
+    print(f"Saved the {b.month} bulletin from {a.file} ({len(b.final_action)} categories). "
+          "Run 'check --no-fetch' to compare it with last month and send alerts.")
 
 
 def cmd_bulletin_chart(s, a):
@@ -121,9 +122,11 @@ def cmd_bulletin_list(s, a):
 def cmd_check(s, a):
     store = _store(s)
     source = tracker.StoredSource(store) if a.no_fetch else tracker.source_for(s, store)
-    result = tracker.check(store, source, s, tracker.notifiers_for(s), month=a.month, force=a.force)
+    from .notify import ConsoleNotifier
+    notifiers = tracker.notifiers_for(s) + [ConsoleNotifier()]
+    result = tracker.check(store, source, s, notifiers, month=a.month, force=a.force)
     print(result.summary)
-    for line in result.delivered:
+    for line in filter(None, result.delivered):
         print(f"  {line}")
     if a.print and result.report:
         print()
@@ -195,10 +198,12 @@ def main(argv=None):
     bs = b.add_subparsers(dest="bulletin_command", required=True)
     bf = bs.add_parser("fetch", help="download a bulletin from travel.state.gov")
     bf.add_argument("--month", help="YYYY-MM; default is the newest published")
+    bf.add_argument("--format", choices=["pdf", "html", "auto"], help="override bulletin.format")
     bt = bs.add_parser("template", help="print a JSON template for entering a bulletin by hand")
     bt.add_argument("--month", required=True)
-    bl = bs.add_parser("load", help="save a hand-filled bulletin (JSON or YAML)")
+    bl = bs.add_parser("load", help="save a bulletin from its PDF, or from a hand-filled JSON/YAML file")
     bl.add_argument("file")
+    bl.add_argument("--month", help="YYYY-MM, if it can't be read from the PDF")
     bc = bs.add_parser("set-chart", help="record which chart USCIS accepts for I-485 this month")
     bc.add_argument("--month", required=True)
     bc.add_argument("--family", choices=CHARTS)
