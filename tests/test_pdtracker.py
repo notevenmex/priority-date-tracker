@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from pathlib import Path
 
@@ -505,8 +506,9 @@ def test_series_skips_months_that_dont_list_the_cell():
 
 def test_delta_words():
     assert history.delta_words(date(2020, 1, 22), date(2021, 1, 22)) == "advanced 1 year"
-    assert history.delta_words(date(2008, 9, 8), date(2008, 9, 22)) == "advanced 2 weeks"
+    assert history.delta_words(date(2008, 9, 8), date(2008, 9, 22)) == "advanced 14 days"
     assert history.delta_words(date(2013, 8, 1), date(2013, 7, 15)) == "retrogressed 17 days"
+    assert history.delta_words(date(2019, 8, 22), date(2021, 1, 5)) == "advanced 1 year, 4 months, 14 days"
     assert history.delta_words(date(2013, 8, 1), CURRENT).startswith("became current")
     assert history.delta_words(CURRENT, CURRENT) == "no movement"
     assert history.delta_words(CURRENT, date(2020, 1, 1)).startswith("retrogressed")
@@ -524,21 +526,21 @@ def test_report_and_dashboard_show_days_left_and_history():
     c = client(id="h", name="Hernandez, Jose", category="F3", priority_date="2001-11-20")
     a = evaluate.analyze([c], nov, oct_)
     md = render.to_markdown("X", a, history=[oct_, nov])
-    assert "## Days until current (1 not yet current)" in md
-    assert ("128 days until current. Final Action cutoff advanced 2 weeks: Jul 01, 2001 (October 2026) "
+    assert "## Time until current (1 not yet current)" in md
+    assert ("4 months, 5 days until current. Final Action cutoff advanced 14 days: Jul 01, 2001 (October 2026) "
             "to Jul 15, 2001 (November 2026)") in md
     assert "estimate" not in md.lower() and "pace" not in md.lower()
     assert "Final Action cutoffs over the last 2 bulletins" in md
     page = dashboard.dashboard(a, [], history=[oct_, nov])
     for view in ("overview", "clients", "profiles", "changes", "chart"):
         assert f"data-view='{view}'" in page
-    assert "128 days" in page and "id='bulletin-data'" in page
+    assert "4 months, 5 days" in page and "id='bulletin-data'" in page
     assert "Estimate" not in page and "pace" not in page.lower()
     # the client's profile puts last month's cutoff next to this month's, with the change in words
     profile = page[page.index("<article class='profile'"):]
     assert "October 2026 bulletin" in profile and "01JUL01" in profile
     assert "November 2026 bulletin" in profile and "15JUL01" in profile
-    assert "Advanced 2 weeks" in profile and "until current" in profile
+    assert "Advanced 14 days" in profile and "until current" in profile
 
 
 # Docketwise matters export
@@ -614,3 +616,22 @@ def test_docketwise_full_report_format():
     assert ms["Pat POE"].complete and ms["Pat POE"].chargeability == "PHILIPPINES"
     assert ms["Sam SAMPLE"].kind == docketwise.IMMEDIATE
     assert "Old CLIENT" not in ms                                     # every matter archived
+
+
+def test_gap_words_reads_like_a_calendar():
+    from pdtracker.models import gap_words
+    assert gap_words(date(2001, 7, 15), date(2001, 11, 20)) == "4 months, 5 days"
+    assert gap_words(date(2020, 1, 1), date(2021, 5, 15)) == "1 year, 4 months, 14 days"
+    assert gap_words(date(2024, 1, 31), date(2024, 3, 1)) == "1 month, 1 day"
+    assert gap_words(date(2024, 1, 1), date(2024, 1, 10)) == "9 days"
+
+
+def test_quick_lookup_is_on_the_dashboard():
+    oct_, nov = bulletin.parse_bulletin_pdf(REAL_OCT), bulletin.parse_bulletin_pdf(REAL_NOV)
+    a = evaluate.analyze([client(id="h", category="F3", priority_date="2001-11-20")], nov, oct_)
+    page = dashboard.dashboard(a, [], history=[oct_, nov], save_html="<input type='hidden' name='token' value='t'>")
+    assert "data-view='lookup'" in page and "id='lk-pd'" in page and "id='lk-save'" in page
+    data = json.loads(page.split("id='bulletin-data'>")[1].split("</script>")[0])
+    assert data["latest"] == "2026-11" and data["previous"] == "2026-10"
+    assert data["uscis"] == {"family": "dates_for_filing", "employment": "final_action"}
+    assert "id='lk-save'" not in dashboard.dashboard(a, [], history=[oct_, nov])     # read-only page: no save

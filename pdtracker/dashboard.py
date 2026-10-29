@@ -12,7 +12,7 @@ from datetime import date
 
 from .categories import CATEGORIES, COUNTRIES, is_family
 from .evaluate import (APPROACHING, BECAME_CURRENT, CSPA_REVIEW, IS_CURRENT, NO_LONGER_CURRENT, NOT_AVAILABLE,
-                       UNKNOWN, WAITING, Analysis, _rank)
+                       UNKNOWN, WAITING, Analysis, _rank, uscis_chart)
 from .evaluate import status as evaluate_status
 import json
 
@@ -182,6 +182,14 @@ table.worklist input,table.worklist select{width:100%;min-width:130px}
 .standing span{color:var(--muted)}
 @media (max-width:520px){.profile{padding:16px}.profile h3{font-size:1.35rem}.cut .val{font-size:1.45rem}
   .profile dl.facts{grid-template-columns:1fr 1fr}.profile dd{font-size:1.1rem}.pchart{padding:14px}}
+.lookup-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 16px;padding:16px}
+.lookup-form label{display:flex;flex-direction:column;gap:6px;font-weight:600;font-size:.95rem;min-width:0}
+.lookup-form input,.lookup-form select{font-size:1.1rem;padding:10px 12px;width:100%;max-width:100%;min-width:0;box-sizing:border-box}
+.lookup-form p{grid-column:1/-1;margin:0}
+@media (max-width:720px){.lookup-form{grid-template-columns:1fr}}
+#lk-result{margin-top:16px}
+.lk-save{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin-top:14px}
+.lk-save label{display:flex;flex-direction:column;gap:4px;font-weight:600}
 .compare-bar{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:end}
 .compare-bar label{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:var(--muted);font-weight:600}
 .compare-cols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
@@ -241,19 +249,67 @@ FILTER_JS = """
   var D=JSON.parse(dataEl.textContent), fromSel=document.getElementById('cmp-from'), toSel=document.getElementById('cmp-to'),
       chartSel=document.getElementById('cmp-chart'), mine=document.getElementById('cmp-mine');
   var MON=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  var MONTH=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   function parse(c){ if(!c||c==='C'||c==='U') return c||null; var p=c.split('-'); return new Date(Date.UTC(+p[0],+p[1]-1,+p[2])); }
   function code(c){ if(!c) return '–'; if(c==='C'||c==='U') return c; var d=parse(c);
     return ('0'+d.getUTCDate()).slice(-2)+MON[d.getUTCMonth()]+String(d.getUTCFullYear()).slice(-2); }
+  function longDate(d){ return MONTH[d.getUTCMonth()]+' '+d.getUTCDate()+', '+d.getUTCFullYear(); }
   function rank(c){ return c==='U'?0:c==='C'?3e15:parse(c).getTime(); }
-  function amount(days){ days=Math.abs(days);
-    if(days>=330){var y=Math.round(days/365.25*10)/10; return y+' year'+(y!==1?'s':'');}
-    if(days>=28){var m=Math.round(days/30.44); return m+' month'+(m!==1?'s':'');}
-    if(days>=7&&days%7===0){var w=days/7; return w+' week'+(w!==1?'s':'');}
-    return days+' day'+(days!==1?'s':''); }
+  // Calendar distance, the same way the server writes it: "1 year, 4 months, 14 days".
+  function gap(a,b){ if(b<a){var t=a;a=b;b=t;}
+    function plus(n){ var tot=a.getUTCFullYear()*12+a.getUTCMonth()+n, y=Math.floor(tot/12), m=tot%12,
+      dim=new Date(Date.UTC(y,m+1,0)).getUTCDate(); return new Date(Date.UTC(y,m,Math.min(a.getUTCDate(),dim))); }
+    var months=(b.getUTCFullYear()-a.getUTCFullYear())*12+b.getUTCMonth()-a.getUTCMonth();
+    while(months>0&&plus(months)>b) months--;
+    var days=Math.round((b-plus(months))/864e5), y=Math.floor(months/12), parts=[]; months%=12;
+    [[y,'year'],[months,'month'],[days,'day']].forEach(function(p){ if(p[0]) parts.push(p[0]+' '+p[1]+(p[0]!==1?'s':'')); });
+    return parts.join(', ')||'0 days'; }
   function words(a,b){ if(!a) return 'new this month'; if(!b) return 'no longer listed'; if(a===b) return 'no movement';
     if(b==='C') return 'became current (C)'; if(b==='U') return 'became unavailable (U)'; if(a==='C') return 'retrogressed from current to a cutoff date'; if(a==='U') return 'available again, up to a cutoff date';
-    var d=Math.round((parse(b)-parse(a))/864e5); return (d>0?'advanced ':'retrogressed ')+amount(d); }
+    return (rank(b)>rank(a)?'advanced ':'retrogressed ')+gap(parse(a),parse(b)); }
   function esc(t){var x=document.createElement('span'); x.textContent=t; return x.innerHTML;}
+  // Quick lookup.
+  var lkPd=document.getElementById('lk-pd'), lkCat=document.getElementById('lk-cat'), lkArea=document.getElementById('lk-area'),
+      lkOut=document.getElementById('lk-result'), lkSave=document.getElementById('lk-save');
+  var CHARTS=[['final_action','Final Action Date'],['dates_for_filing','Date for Filing']];
+  function cell(month,chart,cat,area){ var b=D.bulletins[month]; return b?(((b[chart]||{})[cat]||{})[area]||null):null; }
+  function standing(pd,c){ if(!c) return ['','Not listed','this category is not in the bulletin'];
+    if(c==='U') return ['bad','Unavailable','no visa numbers in this category this month (U)'];
+    if(c==='C'||pd<parse(c)) return ['ok','Current','the priority date is earlier than the cutoff'];
+    return ['warn',gap(parse(c),pd),'until current: how far the cutoff must advance to reach this priority date']; }
+  function lookup(){
+    if(!lkOut) return;
+    if(!lkPd.value){ lkOut.innerHTML='<p class="empty">Enter a priority date to see where it stands in the '+esc(D.labels[D.latest])+' bulletin.</p>';
+      if(lkSave) lkSave.hidden=true; return; }
+    var p=lkPd.value.split('-'), pd=new Date(Date.UTC(+p[0],+p[1]-1,+p[2])), cat=lkCat.value;
+    var area=D.countries.indexOf(lkArea.value)>=0||lkArea.value==='ESGH'?lkArea.value:'ROW';
+    var uscis=D.family.indexOf(cat)>=0?D.uscis.family:D.uscis.employment, blocks='', fa='', canFile=false;
+    CHARTS.forEach(function(ch){
+      var now=cell(D.latest,ch[0],cat,area), st=standing(pd,now), cur=st[1]==='Current';
+      if(ch[0]==='final_action') fa=st; if(ch[0]===uscis) canFile=cur;
+      var pair='<div class="cut now"><span class="lbl">'+esc(D.labels[D.latest])+' bulletin</span><span class="val mono">'+code(now)+
+        '</span><span class="plain">'+(now&&now!=='C'&&now!=='U'?longDate(parse(now)):now==='C'?'current':now==='U'?'unavailable':'not listed')+'</span></div>';
+      var change='<p class="change same">No earlier bulletin on file to compare with.</p>';
+      if(D.previous){ var before=cell(D.previous,ch[0],cat,area), w=words(before,now),
+          tone=before&&now&&rank(now)>rank(before)?'fwd':before&&now&&rank(now)<rank(before)?'back':'same';
+        pair='<div class="cut"><span class="lbl">'+esc(D.labels[D.previous])+' bulletin</span><span class="val mono">'+code(before)+
+          '</span><span class="plain">'+(before&&before!=='C'&&before!=='U'?longDate(parse(before)):before==='C'?'current':before==='U'?'unavailable':'not listed')+
+          '</span></div><div class="arrow" aria-hidden="true">→</div>'+pair;
+        change='<p class="change '+tone+'">'+esc(w.charAt(0).toUpperCase()+w.slice(1))+'</p>'; }
+      blocks+='<section class="pchart"><h4>'+ch[1]+(ch[0]===uscis?' <span class="pill info">USCIS chart for I-485 this month</span>':'')+
+        '</h4><div class="cuts">'+pair+'</div>'+change+'<p class="standing '+st[0]+'"><b>'+esc(st[1])+'</b> <span>'+esc(st[2])+'</span></p></section>';
+    });
+    var pill=fa[1]==='Current'?['ok','Current']:fa[0]==='warn'?['warn','Not current']:[fa[0],fa[1]];
+    lkOut.innerHTML='<article class="profile"><header><h3>Priority date '+longDate(pd)+'</h3><span class="pill '+pill[0]+' lg">'+
+      pill[1]+' · Final Action</span></header><dl class="facts"><div><dt>Preference category</dt><dd><span class="cat">'+esc(cat)+
+      '</span></dd></div><div><dt>Chargeability</dt><dd>'+esc(lkArea.options[lkArea.selectedIndex].text)+'</dd></div><div><dt>May file I-485</dt><dd>'+
+      (canFile?'Yes':'Not yet')+'</dd></div></dl><div class="pcharts">'+blocks+'</div>'+
+      '<p class="muted small">Based on the '+esc(D.labels[D.latest])+' Visa Bulletin. Not a prediction: cutoffs can stall or retrogress.</p></article>';
+    if(lkSave){ lkSave.hidden=false; lkSave.priority_date.value=lkPd.value; lkSave.category.value=cat; lkSave.chargeability.value=lkArea.value; }
+  }
+  [lkPd,lkCat,lkArea].forEach(function(x){ if(x){ x.addEventListener('input',lookup); x.addEventListener('change',lookup); } });
+  lookup();
+  if(!fromSel) return;
   function render(){
     var A=D.bulletins[fromSel.value], B=D.bulletins[toSel.value], chart=chartSel.value, groups={fwd:[],back:[],same:[]};
     D.categories.forEach(function(cat){ D.countries.forEach(function(ct){
@@ -439,7 +495,7 @@ def client_table(a: Analysis, inactive: list, row_actions=None) -> str:
         if r.final_action == IS_CURRENT:
             days_cell = "<span class='big ok'>Current</span><span class='sub'>no wait under Final Action</span>"
         elif r.days_to_cutoff is not None:
-            days_cell = (f"<span class='big'>{hist.days_words(r.days_to_cutoff)}</span>"
+            days_cell = (f"<span class='big'>{hist.gap_words(r.cutoffs[FINAL_ACTION], c.priority_date)}</span>"
                          f"<span class='sub'>until the Final Action cutoff passes</span>")
         else:
             days_cell = "<span class='muted small'>–</span>"
@@ -563,9 +619,8 @@ def _standing(status_now: str, pd, cut) -> str:
     if status_now == IS_CURRENT:
         return ("<p class='standing ok'><b>Current</b> <span>the priority date is earlier than the cutoff</span></p>")
     if status_now == WAITING:
-        days = (pd - cut).days
-        return (f"<p class='standing warn'><b>{hist.days_words(days)}</b> <span>until current: the cutoff must "
-                f"advance {hist.days_words(days)} to reach this priority date</span></p>")
+        return (f"<p class='standing warn'><b>{hist.gap_words(cut, pd)}</b> <span>until current: how far the "
+                "cutoff must advance to reach this priority date</span></p>")
     if status_now == NOT_AVAILABLE:
         return "<p class='standing bad'><b>Unavailable</b> <span>no visa numbers in this category this month (U)</span></p>"
     return "<p class='standing'><b>Not listed</b> <span>this category isn't in the bulletin</span></p>"
@@ -652,18 +707,29 @@ def profiles(a: Analysis, link: bool = False) -> str:
     return search + f"<div class='profiles'>{''.join(client_profile(r, a, link) for r in rows)}</div>"
 
 
-def compare_view(a: Analysis, history: list) -> str:
+def bulletin_data(a: Analysis, history: list, chart_defaults: dict | None = None) -> str:
+    """Every bulletin on file as JSON, for the in-page comparison and the quick lookup."""
     bulletins = sorted(history, key=lambda b: b.month)
     clients = {}
     for r in a.rows:
         key = f"{r.client.category}|{r.client.chargeability}"
         clients[key] = clients.get(key, 0) + 1
+    defaults = chart_defaults or {}
     data = {
         "bulletins": {b.month: {k: v for k, v in b.to_dict().items() if k in (FINAL_ACTION, DATES_FOR_FILING)} for b in bulletins},
         "labels": {b.month: month_label(b.month) for b in bulletins},
         "categories": list(CATEGORIES), "countries": GRID_COUNTRIES,
         "countryNames": {k: SHORT_COUNTRY[k] for k in GRID_COUNTRIES}, "clients": clients,
+        "latest": a.bulletin.month, "previous": a.previous.month if a.previous else None,
+        "family": [c for c in CATEGORIES if is_family(c)],
+        "uscis": {"family": uscis_chart(a.bulletin, "F1", defaults), "employment": uscis_chart(a.bulletin, "EB2", defaults)},
     }
+    payload = json.dumps(data).replace("</", "<\\/")
+    return f"<script type='application/json' id='bulletin-data'>{payload}</script>"
+
+
+def compare_view(a: Analysis, history: list) -> str:
+    bulletins = sorted(history, key=lambda b: b.month)
     if len(bulletins) < 2:
         return ("<p class='empty'>Only one bulletin is on file, so there's nothing to compare yet. "
                 "Comparisons appear once next month's bulletin is added.</p>")
@@ -672,7 +738,6 @@ def compare_view(a: Analysis, history: list) -> str:
     newer, older = bulletins[-1].month, bulletins[-2].month
     cols = "".join(f"<div class='ccol {k}' id='cmp-{k}'><h3>{label}<span class='n'>0</span></h3><div class='items'></div></div>"
                    for k, label in (("fwd", "Advanced"), ("back", "Retrogressed"), ("same", "No movement")))
-    payload = json.dumps(data).replace("</", "<\\/")
     return (f"<section class='panel'><div class='head'><div><h2 id='cmp-title'></h2>"
             f"<span class='muted small'>Pick any two bulletins to compare</span></div></div><div class='body' style='padding-top:14px'>"
             f"<div class='compare-bar'><label for='cmp-from'>Earlier bulletin<select id='cmp-from'>{opts(older)}</select></label>"
@@ -681,8 +746,7 @@ def compare_view(a: Analysis, history: list) -> str:
             f"<option value='{DATES_FOR_FILING}'>Dates for Filing</option></select></label>"
             f"<label style='flex-direction:row;align-items:center;gap:8px'><input type='checkbox' id='cmp-mine' checked> "
             f"Only categories where I have clients</label></div></div></section>"
-            f"<div class='compare-cols'>{cols}</div>"
-            f"<script type='application/json' id='bulletin-data'>{payload}</script>")
+            f"<div class='compare-cols'>{cols}</div>")
 
 
 def history_table(a: Analysis, history: list) -> str:
@@ -709,12 +773,32 @@ def history_table(a: Analysis, history: list) -> str:
             f"<tbody>{''.join(body)}</tbody></table></div></div></section>")
 
 
-VIEWS = [("overview", "Overview"), ("clients", "Clients"), ("profiles", "Client profiles"),
+VIEWS = [("overview", "Overview"), ("clients", "Clients"), ("profiles", "Client profiles"), ("lookup", "Quick lookup"),
          ("changes", "Bulletin changes"), ("chart", "Full bulletin")]
 
 
+def lookup_view(a: Analysis, save_html: str = "") -> str:
+    """Quick lookup for a phone call: type a priority date, category and chargeability; the page answers at once."""
+    cats = "".join(f"<option value='{k}'>{k} · {e(v)}</option>" for k, v in CATEGORIES.items())
+    areas = "".join(f"<option value='{k}'>{e(v)}</option>" for k, v in COUNTRIES.items())
+    save = ""
+    if save_html:
+        save = (f"<form method='post' action='/client' id='lk-save' class='lk-save' hidden>{save_html}"
+                "<input type='hidden' name='priority_date'><input type='hidden' name='category'>"
+                "<input type='hidden' name='chargeability'><label>Client name<input name='name' required></label>"
+                "<button>Save as a client</button></form>")
+    return (f"<section class='panel'><div class='body lookup-form'>"
+            "<label>Priority date<input type='date' id='lk-pd'></label>"
+            f"<label>Preference category<select id='lk-cat'>{cats}</select></label>"
+            f"<label>Chargeability<select id='lk-area'>{areas}</select></label>"
+            "<p class='muted small'>Chargeability is usually the country of birth. Any country without its own "
+            "column in the bulletin is “All other countries”.</p></div></section>"
+            f"<div id='lk-result' aria-live='polite'><p class='empty'>Enter a priority date to see where it stands in the "
+            f"{month_label(a.bulletin.month)} bulletin.</p></div>{save}")
+
+
 def dashboard(a: Analysis | None, inactive: list, row_actions=None, action_html: str = "",
-              history: list | None = None) -> str:
+              history: list | None = None, chart_defaults: dict | None = None, save_html: str = "") -> str:
     parts = [bulletin_bar(a, action_html)]
     if not a:
         return "".join(parts)
@@ -727,20 +811,24 @@ def dashboard(a: Analysis | None, inactive: list, row_actions=None, action_html:
     views = {
         "overview": intro("<b>What changed this month, and who needs attention.</b> Start here after each new bulletin.")
                     + glance(a) + summary(a) + attention(a),
-        "clients": intro("<b>Every client, with how long they have left.</b> “Days left” is how far the Final Action "
-                         "cutoff still has to move to pass the client's priority date. Use the buttons to filter.")
+        "clients": intro("<b>Every client, with how long they have left.</b> “Time left” is how far the Final Action "
+                         "cutoff still has to advance to reach the client's priority date. Use the buttons to filter.")
                    + client_table(a, inactive, row_actions),
         "profiles": intro("<b>One profile per client.</b> Each compares the previous bulletin's cutoff with this "
-                          "month's, shows how far it moved, and how many days remain until the priority date is "
+                          "month's, shows how far it moved, and how much time remains until the priority date is "
                           "current. Clients who are not yet current come first.")
                     + profiles(a, link=row_actions is not None),
         "changes": intro("<b>How the cutoffs moved between bulletins.</b> Pick any two months to compare. "
                          "The table below shows each of your clients' categories month by month.")
                    + compare_view(a, history) + history_table(a, history),
+        "lookup": intro("<b>Check a date during a call.</b> Type a priority date, category and chargeability to see "
+                        "where it stands against this month's bulletin, how far it has to go, and how the cutoff moved "
+                        "since last month. Nothing is saved unless you choose to.") + lookup_view(a, save_html),
         "chart": intro("<b>The whole bulletin as published</b>, with each cutoff's change since last month and how many "
                        "of your clients sit in each box.") + bulletin_grid(a),
     }
     for k, _ in VIEWS:
         hidden = "" if k == "overview" else " hidden"
         parts.append(f"<div class='view' data-view='{k}' role='tabpanel'{hidden}>{views[k]}</div>")
+    parts.append(bulletin_data(a, history, chart_defaults))
     return "".join(parts)

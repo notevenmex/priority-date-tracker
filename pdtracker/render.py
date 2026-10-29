@@ -103,14 +103,14 @@ def days_left_section(a: Analysis) -> list[str]:
                      key=lambda r: (r.days_to_cutoff, r.client.name.lower()))
     if not waiting:
         return []
-    lines = [f"## Days until current ({len(waiting)} not yet current)", "",
+    lines = [f"## Time until current ({len(waiting)} not yet current)", "",
              "How far the Final Action cutoff must advance to reach each priority date, and how that cutoff "
              "moved since the previous bulletin.", ""]
     for r in waiting:
         c = r.client
         now = r.cutoffs[FINAL_ACTION]
         line = (f"- **{c.name} ({c.category} {COUNTRIES[c.chargeability]}):** "
-                f"{hist.days_words(r.days_to_cutoff)} until current. Final Action cutoff ")
+                f"{hist.gap_words(now, c.priority_date)} until current. Final Action cutoff ")
         if a.previous:
             before = a.previous.cutoff(FINAL_ACTION, c.category, c.chargeability)
             line += (f"{hist.delta_words(before, now)}: {cutoff_label(before)} ({_month_label(a.previous.month)}) "

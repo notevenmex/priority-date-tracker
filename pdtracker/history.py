@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from .evaluate import movement
-from .models import CHARTS, CURRENT, UNAVAILABLE, Bulletin
+from .models import CHARTS, CURRENT, UNAVAILABLE, Bulletin, gap_words  # noqa: F401  (re-exported)
 
 HISTORY_WINDOW = 6       # months shown in the month-by-month tables
 
@@ -60,20 +60,6 @@ def today_month(today: date | None = None) -> str:
     return f"{today:%Y-%m}"
 
 
-def _amount(days: int) -> str:
-    days = abs(days)
-    if days >= 330:
-        years = round(days / 365.25, 1)
-        return f"{years:g} year{'s' if years != 1 else ''}"
-    if days >= 28:
-        months = round(days / 30.44)
-        return f"{months} month{'s' if months != 1 else ''}"
-    if days >= 7 and days % 7 == 0:
-        weeks = days // 7
-        return f"{weeks} week{'s' if weeks != 1 else ''}"
-    return f"{days} day{'s' if days != 1 else ''}"
-
-
 def delta_words(before, after) -> str:
     """How one cutoff moved, in the words attorneys use: 'advanced 1 month', 'retrogressed 2 weeks', 'no movement'."""
     if before is None:
@@ -90,8 +76,7 @@ def delta_words(before, after) -> str:
         return "retrogressed from current to a cutoff date"
     if before == UNAVAILABLE:
         return "available again, up to a cutoff date"
-    days = (after - before).days
-    return f"{'advanced' if days > 0 else 'retrogressed'} {_amount(days)}"
+    return f"{'advanced' if after > before else 'retrogressed'} {gap_words(before, after)}"
 
 
 def days_words(days: int) -> str:

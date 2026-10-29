@@ -189,7 +189,7 @@ class App:
         check = (f"<form method='post' action='/check'>{self._hidden()}"
                  "<button>Check for a new bulletin</button></form>")
         history = tracker.history_upto(self.store, latest.month) if latest else []
-        body = dashboard.dashboard(analysis, inactive, actions, check, history)
+        body = dashboard.dashboard(analysis, inactive, actions, check, history, self.s.chart_defaults, self._hidden())
         if not analysis:
             names = "".join(f"<li>{_e(c.name)} · {_e(c.category)} · {c.priority_date}</li>"
                             for c in self.store.list_clients())
