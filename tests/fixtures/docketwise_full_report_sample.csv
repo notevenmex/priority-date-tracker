@@ -1,0 +1,7 @@
+title,client,description,updated,priority_date_status,assignees,type,status,priority_date,preference_category,applicant,contact_DW_ID,id,final_action_date_status,uscis_receipts,archived
+"DOE, Jane (I-140)",Example Tech Inc.,"",06/08/26,Not current,AB,I-140,I-140 approved,03/15/24,EB 2nd: India,Jane DOE,1,101,Not Current,IOE0900000001 - Case Was Approved,True
+AOS for Jane Doe,Example Tech Inc.,"",09/01/26,Undefined,CD,AOS with Approved I-140,Biometrics scheduled,Unspecified,Unspecified,Jane DOE,1,102,Unspecified,"IOE0900000002 - Fingerprint Fee Was Received, IOE0900000003 - Case Was Received",False
+Religious worker petition,Example Church,"",05/01/26,Current,AB,I-360 Religious Worker,Case filed,06/21/07,EB Certain Religious Workers: All Areas,Rita ROE,2,103,Current,"",False
+Sibling petition,Example Brother,"",05/01/26,Not current,AB,Unspecified,Unspecified,04/06/20,F4: Philippines,Pat POE,3,104,Not Current,"",False
+Spouse petition,Example Spouse,"",05/01/26,Current,AB,Family Based AOS,Case filed,01/02/25,1. Immediate Relative,Sam SAMPLE,4,105,Current,"",False
+Old closed case,Example Co.,"",01/01/20,Undefined,AB,I-140,Case approved,02/02/19,EB 3rd: All Areas,Old CLIENT,5,106,Unspecified,"",True

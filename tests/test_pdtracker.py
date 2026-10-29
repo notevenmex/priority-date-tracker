@@ -598,3 +598,19 @@ def test_profile_flags_case_system_disagreement():
     assert "class='mismatch'" in html_ and "Petitioner" in html_ and "NVC processing" in html_
     c.outside_status = "Not current"
     assert "class='mismatch'" not in dashboard.client_profile(evaluate.analyze([c], nov, oct_).rows[0], a)
+
+
+def test_docketwise_full_report_format():
+    assert docketwise.split_category("EB 2nd: India") == ("EB2", "INDIA")
+    assert docketwise.split_category("EB Certain Religious Workers: All Areas") == ("SR", "ROW")
+    assert docketwise.split_category("1. Emp: Religious Workers") == ("SR", "")
+    assert docketwise.split_category("EB Other Workers: Philippines") == ("EW", "PHILIPPINES")
+    assert docketwise.split_category("1. Immediate Relative") == ("IR", "")
+    ms = {m.applicant: m for m in docketwise.read(FIXTURES / "docketwise_full_report_sample.csv")}
+    jane = ms["Jane DOE"]                    # archived I-140 holds the dates; the open AOS keeps her tracked
+    assert jane.complete and str(jane.priority_date) == "2024-03-15" and jane.status == "Biometrics scheduled"
+    assert jane.receipt_number == "IOE0900000003" and jane.outside_status == "Not current"
+    assert str(ms["Rita ROE"].priority_date) == "2007-06-21" and ms["Rita ROE"].category == "SR"
+    assert ms["Pat POE"].complete and ms["Pat POE"].chargeability == "PHILIPPINES"
+    assert ms["Sam SAMPLE"].kind == docketwise.IMMEDIATE
+    assert "Old CLIENT" not in ms                                     # every matter archived

@@ -33,7 +33,8 @@ ALIASES = {
     "description": ["description", "matter description"],
     "type": ["type", "matter type"],
     "status": ["status", "matter status"],
-    "outside_status": ["priority_date_status", "priority date status"],
+    "outside_status": ["final_action_date_status", "final action date status", "priority_date_status",
+                       "priority date status"],
     "attorney": ["assignees", "assignee", "attorney", "responsible attorney"],
     "priority_date": ["priority_date", "priority date"],
     "category": ["preference_category", "preference category", "category", "visa category"],
@@ -43,6 +44,8 @@ ALIASES = {
     "external_id": ["id", "matter id", "matter_id", "number"],
     "archived": ["archived"],
     "updated": ["updated", "updated at", "last updated"],
+    "final_action_status": ["final_action_date_status", "final action date status"],
+    "receipts": ["uscis_receipts", "receipts"],
 }
 
 # Matter types that wait on a Visa Bulletin cutoff (or might, depending on the category).
@@ -100,6 +103,7 @@ class Matter:
     receipt_number: str = ""
     external_id: str = ""
     updated: str = ""                         # ISO date, to pick the latest of a client's matters
+    archived: bool = False
     priority_date: object = None
     category: str = ""
     chargeability: str = ""
@@ -139,10 +143,51 @@ def _pick(raw: dict, field_name: str, columns: dict) -> str:
     names = [columns[field_name]] if field_name in columns else ALIASES.get(field_name, [field_name])
     lower = {k.strip().lower(): v for k, v in raw.items() if k}
     for n in names:
-        v = lower.get(n.strip().lower())
-        if v not in (None, ""):
-            return re.sub(r"\s+", " ", str(v)).strip()
+        v = re.sub(r"\s+", " ", str(lower.get(n.strip().lower()) or "")).strip()
+        if v and v.lower() not in BLANKS:
+            return v
     return ""
+
+
+BLANKS = {"unspecified", "undefined", "n/a", "none", "-"}
+
+# Docketwise writes the preference category and the bulletin column together: "EB 2nd: India".
+_DW_CATEGORY = [
+    (re.compile(r"immediate relative", re.I), "IR"),
+    (re.compile(r"other workers?", re.I), "EW"),
+    (re.compile(r"religious", re.I), "SR"),
+    (re.compile(r"\bEB\s*-?\s*(1|1st|first)\b", re.I), "EB1"),
+    (re.compile(r"\bEB\s*-?\s*(2|2nd|second)\b", re.I), "EB2"),
+    (re.compile(r"\bEB\s*-?\s*(3|3rd|third)\b", re.I), "EB3"),
+    (re.compile(r"\bEB\s*-?\s*(4|4th|fourth)\b", re.I), "EB4"),
+    (re.compile(r"\bEB\s*-?\s*(5|5th|fifth)\b", re.I), "EB5U"),
+    (re.compile(r"\bF\s*-?\s*(2A|2B|1|3|4)\b", re.I), None),
+]
+
+
+def split_category(text: str) -> tuple[str, str]:
+    """'EB 2nd: India' -> ('EB2', 'INDIA'); 'F2B: All Areas' -> ('F2B', 'ROW'); 'EB3' -> ('EB3', '').
+    Immediate relatives come back as ('IR', '')."""
+    head, _, area = text.partition(":")
+    area = area.strip()
+    if any(p.search(area) for p, _ in _DW_CATEGORY):      # "1. Emp: Religious Workers" names no country
+        head, area = text, ""
+    country = "" if not area else "ROW" if re.fullmatch(r"all (areas|other countries)|row", area, re.I) \
+        else chargeability_column(area)
+    for pattern, cat in _DW_CATEGORY:
+        m = pattern.search(head)
+        if m:
+            return (cat or f"F{m[1].upper()}"), ("" if cat == "IR" else country)
+    return normalize_category(head), country
+
+
+def _date(text: str):
+    """Docketwise writes dates as MM/DD/YY."""
+    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{2})", text)
+    if m:
+        yy = int(m[3])
+        text = f"{int(m[1])}/{int(m[2])}/{yy + (2000 if yy < 70 else 1900)}"
+    return parse_date(text)
 
 
 def applicant_from_title(title: str) -> str:
@@ -206,7 +251,7 @@ def read(path: str | Path, columns: dict | None = None) -> list[Matter]:
     with Path(path).open(newline="", encoding="utf-8-sig") as f:
         for n, raw in enumerate(csv.DictReader(f), start=2):
             title = _pick(raw, "title", columns)
-            if not title or _pick(raw, "archived", columns).lower() == "true":
+            if not title:
                 continue
             client = _pick(raw, "client", columns)
             applicant = _pick(raw, "applicant", columns) or applicant_from_title(title)
@@ -218,22 +263,52 @@ def read(path: str | Path, columns: dict | None = None) -> list[Matter]:
                        petitioner=client, description=_pick(raw, "description", columns),
                        type=_pick(raw, "type", columns), status=_pick(raw, "status", columns),
                        outside_status=_pick(raw, "outside_status", columns), attorney=_pick(raw, "attorney", columns),
-                       receipt_number=_pick(raw, "receipt_number", columns), external_id=_pick(raw, "external_id", columns))
-            if m.outside_status.lower() == "undefined":
-                m.outside_status = ""
+                       receipt_number=_pick(raw, "receipt_number", columns) or _receipt(_pick(raw, "receipts", columns)),
+                       external_id=_pick(raw, "external_id", columns),
+                       archived=_pick(raw, "archived", columns).lower() == "true")
+            m.outside_status = {"not current": "Not current", "current": "Current"}.get(m.outside_status.lower(), "")
             if note:
                 m.notes.append(note)
             if _same_person(m.petitioner, m.applicant):
                 m.petitioner = ""               # the "client" is the applicant themself
             _classify(m, raw, columns)
             matters.append(m)
-    matters = _merge_people(matters)
+    matters = [m for m in _merge_people(matters) if not m.archived]   # closed unless the person has an open matter
     link_derivatives(matters)
     return matters
 
 
+def _receipt(text: str) -> str:
+    """'IOE0908822583 - USCIS Is currently Processing the Case, ...' -> the latest receipt number."""
+    found = re.findall(r"\b[A-Z]{3}\d{10}\b", text or "")
+    return found[-1] if found else ""
+
+
 def _classify(m: Matter, raw: dict, columns: dict) -> None:
     text = " ".join([m.title, m.type, m.description])
+    cat = _pick(raw, "category", columns)
+    if cat and not DONE_STATUSES.search(m.status):
+        try:
+            m.category, country = split_category(cat)
+        except ValueError as e:
+            m.category, country = "", ""
+            m.notes.append(str(e))
+        if m.category == "IR":
+            m.category, m.kind = "", IMMEDIATE
+            return
+        m.kind = PREFERENCE
+        explicit = _pick(raw, "chargeability", columns)
+        m.chargeability = chargeability_column(explicit) if explicit else country
+        d = _pick(raw, "priority_date", columns)
+        if d:
+            try:
+                m.priority_date = _date(d)
+            except ValueError:
+                m.notes.append(f"couldn't read priority date '{d}'")
+        dm = DERIVATIVE.search(text)
+        if dm:
+            m.principal = dm[1].strip()
+        return
     # The matter type decides; the title only when the type was never set.
     deciding = m.title if UNSPECIFIED.match(m.type) else m.type
     if (NOT_GREEN_CARD_TYPES.search(deciding) or not GREEN_CARD_TYPES.search(deciding)
@@ -250,18 +325,9 @@ def _classify(m: Matter, raw: dict, columns: dict) -> None:
     d = _pick(raw, "priority_date", columns)
     if d:
         try:
-            m.priority_date = parse_date(d)
+            m.priority_date = _date(d)
         except ValueError:
             m.notes.append(f"couldn't read priority date '{d}'")
-    cat = _pick(raw, "category", columns)
-    if cat:
-        try:
-            m.category = normalize_category(cat)
-        except ValueError as e:
-            if "immediate relative" in str(e):
-                m.kind = IMMEDIATE
-                return
-            m.notes.append(str(e))
     if not m.category:
         m.category = _infer_category(text)
         if m.category == "SR":
@@ -304,14 +370,15 @@ def _merge_people(matters: list[Matter]) -> list[Matter]:
         twin.priority_date = twin.priority_date or m.priority_date
         twin.category = twin.category or m.category
         twin.chargeability = twin.chargeability or m.chargeability
-        twin.receipt_number = twin.receipt_number or m.receipt_number
+        twin.receipt_number = new.receipt_number or old.receipt_number
         twin.petitioner = twin.petitioner or m.petitioner
         twin.applicant = max(twin.applicant, m.applicant, key=lambda n: len(_name_tokens(n)))
-        twin.type = f"{old.type} + {new.type}" if old.type != new.type else new.type
+        twin.type = " + ".join(dict.fromkeys(t for t in (old.type, new.type) if t))
         twin.status, twin.updated = new.status, new.updated
         twin.outside_status = new.outside_status or old.outside_status
         twin.attorney = new.attorney or old.attorney
         twin.principal = twin.principal or m.principal
+        twin.archived = twin.archived and m.archived
         twin.notes += [n for n in m.notes if n not in twin.notes]
         twin.notes.append(f"combines matters '{old.title}' and '{new.title}'")
     return out
