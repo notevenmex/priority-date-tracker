@@ -213,7 +213,7 @@ _SECTIONS = [
     (re.compile(r"DATES\s+FOR\s+FILING\s+(?:OF\s+)?EMPLOYMENT", re.I), "employment", DATES_FOR_FILING),
 ]
 _DEFAULT_COLUMNS = ["ROW", "CHINA", "INDIA", "MEXICO", "PHILIPPINES"]
-_TITLE = re.compile(r"VISA\s+BULLETIN\s+FOR\s+([A-Z]+)\s+(\d{4})", re.I)
+_TITLE = re.compile(r"(?:VISA\s+BULLETIN|IMMIGRANT\s+NUMBERS)\s+FOR\s+([A-Z]+)\s+(\d{4})", re.I)
 
 
 def month_from_text(text: str) -> str | None:

@@ -459,3 +459,34 @@ def test_load_pdf_file(tmp_path):
     p.write_bytes(SAMPLE_PDF)
     b = bulletin.load_bulletin_file(p)
     assert b.month == "2026-12" and b.source == "file:dec.pdf"
+
+
+# Real bulletins from travel.state.gov (public documents)
+
+REAL_OCT = (FIXTURES / "visabulletin_October2026.pdf").read_bytes()
+REAL_NOV = (FIXTURES / "visabulletin_November2026.pdf").read_bytes()
+
+
+def test_real_november_2026_bulletin():
+    b = bulletin.parse_bulletin_pdf(REAL_NOV)
+    assert b.month == "2026-11"
+    assert len(b.final_action) == 15 and len(b.dates_for_filing) == 15
+    assert b.cutoff(FINAL_ACTION, "F1", "MEXICO") == date(2008, 9, 22)
+    assert b.cutoff(FINAL_ACTION, "F2A", "MEXICO") == date(2026, 4, 22)
+    assert b.cutoff(DATES_FOR_FILING, "F2A", "ROW") == CURRENT
+    assert b.cutoff(DATES_FOR_FILING, "F4", "MEXICO") == date(2001, 4, 30)
+    assert b.cutoff(FINAL_ACTION, "EW", "PHILIPPINES") == date(2022, 1, 1)
+    assert b.cutoff(FINAL_ACTION, "SR", "INDIA") == date(2022, 12, 15)     # label split over three lines
+    assert b.cutoff(DATES_FOR_FILING, "EB5U", "CHINA") == date(2021, 3, 1)   # table split across pages
+    assert b.cutoff(DATES_FOR_FILING, "EB5I", "ROW") == CURRENT
+
+
+def test_real_october_to_november_changes():
+    oct_, nov = bulletin.parse_bulletin_pdf(REAL_OCT), bulletin.parse_bulletin_pdf(REAL_NOV)
+    assert oct_.month == "2026-10"
+    a = evaluate.analyze([], nov, oct_)
+    moved = {(m.chart, m.category, m.country): m.direction for m in a.movements}
+    assert moved[(FINAL_ACTION, "F1", "ROW")] == "forward"           # 22JAN20 -> 22JAN21
+    assert moved[(FINAL_ACTION, "EB2", "ROW")] == "forward"          # 01JAN25 -> 01APR25
+    assert (FINAL_ACTION, "EB4", "ROW") not in moved                 # unchanged
+    assert not a.retrogressions

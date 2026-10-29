@@ -42,5 +42,5 @@ The local version is the system-specific option in the sense of "runs on the off
 
 ## Known limits
 
-- The PDF and web page readers were written against the bulletin's published layout and tested on sample files built to match it, because this build couldn't reach travel.state.gov. Check the first real bulletin against the published one. If the layout changes, reading fails with a clear message and typing the dates in keeps working.
+- The PDF reader is tested against the real October and November 2026 bulletins (in `tests/fixtures`). The web page reader is tested only on a sample page built to match the published layout. If the State Department changes either layout, reading fails with a clear message, and staff can still type the dates in.
 - The tracker doesn't compute CSPA age, cross-chargeability, or eligibility to retain a priority date. Those stay with the attorney.
