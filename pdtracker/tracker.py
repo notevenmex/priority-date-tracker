@@ -116,6 +116,11 @@ def reminder_text(s: Settings, month: str, error: str = "") -> tuple[str, str]:
     return f"{s.office_name}: please add the {name} Visa Bulletin", "\n".join(lines)
 
 
+def history_upto(store, month: str) -> list[Bulletin]:
+    from .history import all_bulletins
+    return [b for b in all_bulletins(store) if b.month <= month]
+
+
 def analyze(store, s: Settings, bulletin: Bulletin) -> evaluate.Analysis:
     return evaluate.analyze(
         store.list_clients(), bulletin, previous_bulletin(store, bulletin.month),
@@ -157,7 +162,7 @@ def check(store, source, s: Settings, notifiers: list, month: str | None = None,
 
     analysis = analyze(store, s, bulletin)
     subject = render.subject(s.office_name, analysis)
-    report = render.to_markdown(s.office_name, analysis, s.chart_defaults)
+    report = render.to_markdown(s.office_name, analysis, s.chart_defaults, history_upto(store, bulletin.month))
     delivered = [n.send(subject, report, analysis) for n in notifiers]
     store.record_statuses(bulletin.month, analysis.rows)
     store.mark_processed(bulletin.month)
@@ -173,4 +178,5 @@ def current_report(store, s: Settings, month: str | None = None) -> tuple[evalua
     if bulletin is None:
         return None
     analysis = analyze(store, s, bulletin)
-    return analysis, render.to_markdown(s.office_name, analysis, s.chart_defaults)
+    return analysis, render.to_markdown(s.office_name, analysis, s.chart_defaults,
+                                        history_upto(store, bulletin.month))

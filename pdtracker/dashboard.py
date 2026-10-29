@@ -13,6 +13,9 @@ from datetime import date
 from .categories import CATEGORIES, COUNTRIES, is_family
 from .evaluate import (APPROACHING, BECAME_CURRENT, CSPA_REVIEW, IS_CURRENT, NO_LONGER_CURRENT, NOT_AVAILABLE,
                        UNKNOWN, WAITING, Analysis, _rank)
+import json
+
+from . import history as hist
 from .models import CHART_LABELS, CURRENT, DATES_FOR_FILING, FINAL_ACTION, UNAVAILABLE
 
 FONTS = ("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&"
@@ -39,6 +42,7 @@ CSS = """
   --ok:#7fcf9c; --ok-bg:#183326; --warn:#e8b25e; --warn-bg:#3a2b12; --bad:#f08b80; --bad-bg:#3c1d1a;
   --info:#a9b5f0; --info-bg:#232a4a; --idle:#9aa5ad; --idle-bg:#222d35; color-scheme:dark}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans)}
 .wrap{max-width:1180px;margin:0 auto;padding-block:20px 48px;
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
@@ -62,7 +66,7 @@ nav.tabs a[aria-current="page"]{background:var(--surface);color:var(--ink);box-s
 button,.btn{font:inherit;font-weight:600;font-size:.9rem;padding:8px 14px;border-radius:8px;border:1px solid var(--accent);
   background:var(--accent);color:var(--accent-ink);cursor:pointer;text-decoration:none;display:inline-block}
 button.ghost,.btn.ghost{background:transparent;color:var(--accent)}
-button.link{border:0;background:none;color:var(--accent);padding:2px 4px;font-weight:500}
+button.link{border:0;background:none;color:var(--accent);padding:2px 4px;font-weight:500;white-space:nowrap}
 .notice{border-radius:10px;padding:12px 16px;background:var(--info-bg);color:var(--ink);border:1px solid var(--line)}
 .notice.warn{background:var(--warn-bg)}
 .tiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
@@ -123,6 +127,43 @@ table.bulletin td.moved{background:var(--ok-bg)} table.bulletin td.back{backgrou
   padding:10px 14px;border-radius:8px;font-size:.88rem}
 .empty{padding:20px 0;color:var(--muted)}
 @media (prefers-reduced-motion:no-preference){tbody tr td{transition:background .12s}}
+nav.views{display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px;border-bottom:1px solid var(--line);padding-bottom:0;scrollbar-width:thin}
+nav.views button{flex:none}
+nav.views button{font:inherit;font-size:.95rem;font-weight:600;padding:10px 14px;background:none;border:0;border-bottom:3px solid transparent;
+  color:var(--muted);border-radius:0;cursor:pointer;margin-bottom:-1px}
+nav.views button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+nav.views .count{font-size:.75rem;font-weight:700;margin-left:6px;padding:1px 7px;border-radius:999px;background:var(--soft);color:var(--muted)}
+.view{display:flex;flex-direction:column;gap:20px}
+.intro{margin:0;color:var(--muted);font-size:.92rem;max-width:72ch}
+.intro b{color:var(--ink)}
+.glance{font-size:1.05rem;line-height:1.55;max-width:70ch}
+td.days{min-width:150px}
+.big{font-size:1.15rem;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.big.ok{color:var(--ok)}
+.queue{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.qcard{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.qcard .who{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.qcard .who b{min-width:0}
+.qcard .days-left{display:flex;align-items:baseline;gap:8px}
+.qcard .days-left .n{font-size:1.8rem;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+.bar{height:8px;border-radius:999px;background:var(--soft);overflow:hidden}
+.bar i{display:block;height:100%;border-radius:999px;background:var(--warn)}
+.qcard dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 12px;margin:0;font-size:.85rem}
+.qcard dt{color:var(--muted)} .qcard dd{margin:0}
+.compare-bar{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:end}
+.compare-bar label{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:var(--muted);font-weight:600}
+.compare-cols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+@media (max-width:900px){.compare-cols{grid-template-columns:1fr}}
+.ccol{background:var(--surface);border:1px solid var(--line);border-radius:12px;min-width:0;border-top:3px solid var(--tone,var(--line))}
+.ccol.fwd{--tone:var(--ok)} .ccol.back{--tone:var(--bad)} .ccol.same{--tone:var(--idle)}
+.ccol h3{font-size:1rem;padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
+.ccol ul{list-style:none;margin:0;padding:4px 14px 10px;display:flex;flex-direction:column}
+.ccol li{padding:8px 0;border-bottom:1px solid var(--line);font-size:.88rem}
+.ccol li:last-child{border-bottom:0}
+.ccol li .k{font-weight:600} .ccol li .mono{font-size:.82rem}
+.ccol .none{color:var(--muted);padding:12px 14px;font-size:.88rem}
+table.history td{white-space:nowrap}
+table.history td.up{background:var(--ok-bg)} table.history td.down{background:var(--bad-bg)}
 """
 
 FILTER_JS = """
@@ -147,6 +188,57 @@ FILTER_JS = """
     gt.forEach(function(x){x.setAttribute('aria-pressed', x===b?'true':'false')});
     document.querySelectorAll('[data-chart]').forEach(function(t){t.hidden = t.dataset.chart!==b.dataset.chartTab});});});
   apply();
+  // Tabs: one view at a time, remembered in the address (#overview, #clients ...).
+  var tabs=[].slice.call(document.querySelectorAll('nav.views button')), views=[].slice.call(document.querySelectorAll('.view'));
+  function show(name){
+    if(!views.some(function(v){return v.dataset.view===name})) name='overview';
+    views.forEach(function(v){v.hidden=v.dataset.view!==name});
+    tabs.forEach(function(t){t.setAttribute('aria-selected', t.dataset.view===name?'true':'false')});
+  }
+  function remember(name){ try{ history.replaceState(null,'','#'+name) }catch(err){} }
+  tabs.forEach(function(t){t.addEventListener('click',function(){ remember(t.dataset.view); show(t.dataset.view);});});
+  window.addEventListener('hashchange',function(){show(location.hash.slice(1))});
+  if(tabs.length) show(location.hash.slice(1));
+  [].slice.call(document.querySelectorAll('[data-goto]')).forEach(function(a){a.addEventListener('click',function(ev){
+    ev.preventDefault(); remember(a.dataset.goto); show(a.dataset.goto); window.scrollTo(0,0);});});
+  // Compare any two bulletins.
+  var dataEl=document.getElementById('bulletin-data'); if(!dataEl) return;
+  var D=JSON.parse(dataEl.textContent), fromSel=document.getElementById('cmp-from'), toSel=document.getElementById('cmp-to'),
+      chartSel=document.getElementById('cmp-chart'), mine=document.getElementById('cmp-mine');
+  var MON=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  function parse(c){ if(!c||c==='C'||c==='U') return c||null; var p=c.split('-'); return new Date(Date.UTC(+p[0],+p[1]-1,+p[2])); }
+  function code(c){ if(!c) return '–'; if(c==='C'||c==='U') return c; var d=parse(c);
+    return ('0'+d.getUTCDate()).slice(-2)+MON[d.getUTCMonth()]+String(d.getUTCFullYear()).slice(-2); }
+  function rank(c){ return c==='U'?0:c==='C'?3e15:parse(c).getTime(); }
+  function amount(days){ days=Math.abs(days);
+    if(days>=330){var y=Math.round(days/365.25*10)/10; return y+' year'+(y!==1?'s':'');}
+    if(days>=28){var m=Math.round(days/30.44); return m+' month'+(m!==1?'s':'');}
+    if(days>=7&&days%7===0){var w=days/7; return w+' week'+(w!==1?'s':'');}
+    return days+' day'+(days!==1?'s':''); }
+  function words(a,b){ if(!a) return 'new this month'; if(!b) return 'no longer listed'; if(a===b) return 'no change';
+    if(b==='C') return 'became current'; if(b==='U') return 'became unavailable'; if(a==='C'||a==='U') return 'now has a cutoff date';
+    var d=Math.round((parse(b)-parse(a))/864e5); return 'moved '+(d>0?'forward ':'back ')+amount(d); }
+  function esc(t){var x=document.createElement('span'); x.textContent=t; return x.innerHTML;}
+  function render(){
+    var A=D.bulletins[fromSel.value], B=D.bulletins[toSel.value], chart=chartSel.value, groups={fwd:[],back:[],same:[]};
+    D.categories.forEach(function(cat){ D.countries.forEach(function(ct){
+      var key=cat+'|'+ct, n=D.clients[key]||0; if(mine.checked && !n) return;
+      var a=((A[chart]||{})[cat]||{})[ct], b=((B[chart]||{})[cat]||{})[ct];
+      if(!a&&!b) return;
+      var g = (!a||!b)?'same' : rank(b)>rank(a)?'fwd' : rank(b)<rank(a)?'back':'same';
+      groups[g].push('<li><span class="k">'+esc(cat)+' · '+esc(D.countryNames[ct])+'</span>'+(n?' <span class="dot" title="your clients">'+n+'</span>':'')+
+        '<br><span class="mono">'+code(a)+' → '+code(b)+'</span> <span class="muted">'+esc(words(a,b))+'</span></li>');
+    });});
+    [['fwd','Moved forward'],['back','Moved back'],['same','No change']].forEach(function(g){
+      var el=document.getElementById('cmp-'+g[0]);
+      el.querySelector('.n').textContent=groups[g[0]].length;
+      el.querySelector('.items').innerHTML = groups[g[0]].length ? '<ul>'+groups[g[0]].join('')+'</ul>'
+        : '<p class="none">Nothing '+(g[0]==='same'?'unchanged':g[1].toLowerCase())+'.</p>';
+    });
+    document.getElementById('cmp-title').textContent = D.labels[fromSel.value]+' → '+D.labels[toSel.value];
+  }
+  [fromSel,toSel,chartSel,mine].forEach(function(x){x.addEventListener('change',render)});
+  render();
 })();
 """
 
@@ -222,7 +314,7 @@ def delta(prev, cur) -> tuple[str, str]:
 
 def shell(title: str, office: str, body: str, active: str = "clients", message: str = "",
           message_kind: str = "", script: str = "") -> str:
-    tabs = [("clients", "/", "Clients"), ("bulletin", "/bulletin", "Enter a bulletin"), ("report", "/report", "Report")]
+    tabs = [("clients", "/", "Dashboard"), ("bulletin", "/bulletin", "Enter a bulletin"), ("report", "/report", "Report")]
     nav = "".join(f'<a href="{href}"{" aria-current=\"page\"" if key == active else ""}>{label}</a>'
                   for key, href, label in tabs)
     note = f'<div class="notice {e(message_kind)}" role="status">{e(message)}</div>' if message else ""
@@ -292,7 +384,7 @@ def attention(a: Analysis) -> str:
             f"<div class='body'>{items}</div></section>")
 
 
-def client_table(a: Analysis, inactive: list, row_actions=None) -> str:
+def client_table(a: Analysis, inactive: list, row_actions=None, waits: dict | None = None) -> str:
     """row_actions(client) -> extra cell HTML (edit / stop tracking), or None for a read-only view."""
     events_by_client = {}
     for ev in a.events:
@@ -306,10 +398,16 @@ def client_table(a: Analysis, inactive: list, row_actions=None) -> str:
             filters.append("i485")
         filters += events_by_client.get(c.id, [])
         fa_cut, df_cut = r.cutoffs[FINAL_ACTION], r.cutoffs[DATES_FOR_FILING]
-        gap = (f"<span class='sub'>{span(r.days_to_cutoff)} from cutoff</span>"
-               if r.days_to_cutoff is not None else "")
         chart = "Filing chart" if r.uscis_chart == DATES_FOR_FILING else "Final Action chart"
         i485 = ("<span class='pill ok'>Open</span>" if r.can_file_i485 else "<span class='pill'>Not yet</span>")
+        w = (waits or {}).get(c.id)
+        if r.final_action == IS_CURRENT:
+            days_cell = "<span class='big ok'>Current</span><span class='sub'>no wait under Final Action</span>"
+        elif w and w.days_left:
+            days_cell = (f"<span class='big'>{hist.days_words(w.days_left)}</span>"
+                         f"<span class='sub'>{e(hist.wait_words(w))}</span>")
+        else:
+            days_cell = "<span class='muted small'>–</span>"
         search = " ".join([c.name, c.category, COUNTRIES[c.chargeability], c.receipt_number, c.case_type]).lower()
         sub = " · ".join(x for x in (c.case_type, c.receipt_number) if x)
         name = (f"<a href='/client/{e(c.id)}'>{e(c.name)}</a>" if row_actions else f"<b>{e(c.name)}</b>")
@@ -319,7 +417,8 @@ def client_table(a: Analysis, inactive: list, row_actions=None) -> str:
             f"<td class='client'>{name}<span class='sub'>{e(sub)}</span></td>"
             f"<td><span class='cat'>{e(c.category)}</span><span class='sub'>{e(COUNTRIES[c.chargeability])}</span></td>"
             f"<td class='mono nowrap'>{long_date(c.priority_date)}</td>"
-            f"<td>{_pill(r.final_action)}<span class='sub mono'>cutoff {bulletin_code(fa_cut)}</span>{gap}</td>"
+            f"<td class='days'>{days_cell}</td>"
+            f"<td>{_pill(r.final_action)}<span class='sub mono'>cutoff {bulletin_code(fa_cut)}</span></td>"
             f"<td>{_pill(r.dates_for_filing)}<span class='sub mono'>cutoff {bulletin_code(df_cut)}</span></td>"
             f"<td>{i485}<span class='sub'>{chart}</span></td>{actions}</tr>")
     for c in inactive:
@@ -328,17 +427,17 @@ def client_table(a: Analysis, inactive: list, row_actions=None) -> str:
         rows.append(f"<tr class='inactive' data-status='inactive' data-filters='inactive' data-search='{e(c.name.lower())}'>"
                     f"<td class='client'>{name}<span class='sub'>Not tracked (case closed)</span></td>"
                     f"<td><span class='cat'>{e(c.category)}</span><span class='sub'>{e(COUNTRIES[c.chargeability])}</span></td>"
-                    f"<td class='mono'>{long_date(c.priority_date)}</td><td colspan='3' class='muted small'>–</td>{actions}</tr>")
+                    f"<td class='mono'>{long_date(c.priority_date)}</td><td colspan='4' class='muted small'>–</td>{actions}</tr>")
     chips = [("all", "All"), (IS_CURRENT, "Current"), (WAITING, "Waiting"), ("i485", "Can file I-485"),
              ("family", "Family"), ("employment", "Employment")]
     if inactive:
         chips.append(("inactive", "Not tracked"))
     chip_html = "".join(f"<button type='button' class='chip' data-filter='{k}' aria-pressed='{str(k == 'all').lower()}'>{v}</button>"
                         for k, v in chips)
-    head = ("<tr><th>Client</th><th>Category</th><th>Priority date</th><th>Final Action</th>"
+    head = ("<tr><th>Client</th><th>Category</th><th>Priority date</th><th>Days left</th><th>Final Action</th>"
             "<th>Dates for Filing</th><th>I-485 filing</th>" + ("<th></th>" if row_actions else "") + "</tr>")
-    body = "".join(rows) if rows else f"<tr><td colspan='7' class='empty'>No clients yet. Add the first one below.</td></tr>"
-    return (f"<section class='panel' id='clients'><div class='head'><div><h2>Clients</h2>"
+    body = "".join(rows) if rows else f"<tr><td colspan='8' class='empty'>No clients yet. Add the first one below.</td></tr>"
+    return (f"<section class='panel' id='clients'><div class='head'><div><h2>All clients</h2>"
             f"<span class='muted small' id='client-count'></span></div><div class='filters'>"
             f"<input type='search' id='client-search' placeholder='Search name, category, receipt' aria-label='Search clients'>"
             f"{chip_html}</div></div><div class='scroll'><table><thead>{head}</thead><tbody>{body}</tbody></table></div></section>")
@@ -399,8 +498,150 @@ def bulletin_bar(a: Analysis | None, action_html: str = "") -> str:
             f"</div>{action_html}</div>")
 
 
-def dashboard(a: Analysis | None, inactive: list, row_actions=None, action_html: str = "") -> str:
+def waits_for(a: Analysis, history: list) -> dict:
+    return {r.client.id: hist.wait_for(r, FINAL_ACTION, history, a.bulletin.month) for r in a.rows}
+
+
+def intro(text: str) -> str:
+    return f"<p class='intro'>{text}</p>"
+
+
+def glance(a: Analysis) -> str:
+    if not a.previous:
+        return (f"<p class='glance'>This is the first bulletin on file. Comparisons start once the next "
+                f"bulletin arrives.</p>")
+    fwd = sum(1 for m in a.movements if m.direction == "forward")
+    back = len(a.retrogressions)
+    cur = len({ev.client.id for ev in a.events_of(BECAME_CURRENT)})
+    lost = len({ev.client.id for ev in a.events_of(NO_LONGER_CURRENT)})
+    parts = [f"Since the {month_label(a.previous.month)} bulletin, <b>{fwd}</b> cutoff{'s' if fwd != 1 else ''} moved forward "
+             f"and <b>{back}</b> moved back."]
+    if cur:
+        parts.append(f"<b>{cur}</b> of your clients became current.")
+    if lost:
+        parts.append(f"<b>{lost}</b> lost their place.")
+    if not cur and not lost:
+        parts.append("None of your clients changed status.")
+    return f"<p class='glance'>{' '.join(parts)} <a href='#changes' data-goto='changes'>See every change</a></p>"
+
+
+def waiting_line(a: Analysis, waits: dict) -> str:
+    rows = [(waits[r.client.id], r) for r in a.rows if waits.get(r.client.id) and waits[r.client.id].days_left]
+    if not rows:
+        return "<p class='empty'>No one is waiting. Every active client is current under Final Action.</p>"
+    rows.sort(key=lambda t: t[0].days_left)
+    longest = max(w.days_left for w, _ in rows)
+    cards = []
+    for w, r in rows:
+        c = r.client
+        pct = max(4, round(100 * (1 - w.days_left / longest))) if longest else 100
+        df = r.cutoffs[DATES_FOR_FILING]
+        dff = ("current now" if r.dates_for_filing == IS_CURRENT else
+               f"{hist.days_words((c.priority_date - df).days)} to go" if r.dates_for_filing == WAITING else "not listed")
+        pace = (f"{'+' if w.pace >= 0 else ''}{round(w.pace)} days per month" if w.pace is not None else "not enough history yet")
+        cards.append(
+            f"<article class='qcard' data-search='{e(c.name.lower())}'><div class='who'><b>{e(c.name)}</b>"
+            f"<span class='muted small'><span class='cat'>{e(c.category)}</span> · {e(COUNTRIES[c.chargeability])}</span></div>"
+            f"<div class='days-left'><span class='n'>{w.days_left:,}</span><span class='muted'>days to go</span></div>"
+            f"<div class='bar' title='Closer to current toward the right'><i style='width:{pct}%'></i></div>"
+            f"<dl><dt>Estimate</dt><dd>{e(hist.wait_words(w))}</dd>"
+            f"<dt>Priority date</dt><dd class='mono'>{long_date(c.priority_date)}</dd>"
+            f"<dt>Cutoff now</dt><dd><span class='mono'>{bulletin_code(r.cutoffs[FINAL_ACTION])}</span> (Final Action)</dd>"
+            f"<dt>Recent pace</dt><dd>{e(pace)}</dd>"
+            f"<dt>Filing chart</dt><dd>{e(dff)}</dd></dl></article>")
+    return f"<div class='queue'>{''.join(cards)}</div>"
+
+
+def compare_view(a: Analysis, history: list) -> str:
+    bulletins = sorted(history, key=lambda b: b.month)
+    clients = {}
+    for r in a.rows:
+        key = f"{r.client.category}|{r.client.chargeability}"
+        clients[key] = clients.get(key, 0) + 1
+    data = {
+        "bulletins": {b.month: {k: v for k, v in b.to_dict().items() if k in (FINAL_ACTION, DATES_FOR_FILING)} for b in bulletins},
+        "labels": {b.month: month_label(b.month) for b in bulletins},
+        "categories": list(CATEGORIES), "countries": GRID_COUNTRIES,
+        "countryNames": {k: SHORT_COUNTRY[k] for k in GRID_COUNTRIES}, "clients": clients,
+    }
+    if len(bulletins) < 2:
+        return ("<p class='empty'>Only one bulletin is on file, so there's nothing to compare yet. "
+                "Comparisons appear once next month's bulletin is added.</p>")
+    opts = lambda sel: "".join(f"<option value='{b.month}'{' selected' if b.month == sel else ''}>{month_label(b.month)}</option>"
+                               for b in bulletins)
+    newer, older = bulletins[-1].month, bulletins[-2].month
+    cols = "".join(f"<div class='ccol {k}' id='cmp-{k}'><h3>{label}<span class='n'>0</span></h3><div class='items'></div></div>"
+                   for k, label in (("fwd", "Moved forward"), ("back", "Moved back"), ("same", "No change")))
+    payload = json.dumps(data).replace("</", "<\\/")
+    return (f"<section class='panel'><div class='head'><div><h2 id='cmp-title'></h2>"
+            f"<span class='muted small'>Pick any two bulletins to compare</span></div></div><div class='body' style='padding-top:14px'>"
+            f"<div class='compare-bar'><label for='cmp-from'>Earlier bulletin<select id='cmp-from'>{opts(older)}</select></label>"
+            f"<label for='cmp-to'>Later bulletin<select id='cmp-to'>{opts(newer)}</select></label>"
+            f"<label for='cmp-chart'>Chart<select id='cmp-chart'><option value='{FINAL_ACTION}'>Final Action Dates</option>"
+            f"<option value='{DATES_FOR_FILING}'>Dates for Filing</option></select></label>"
+            f"<label style='flex-direction:row;align-items:center;gap:8px'><input type='checkbox' id='cmp-mine' checked> "
+            f"Only categories where I have clients</label></div></div></section>"
+            f"<div class='compare-cols'>{cols}</div>"
+            f"<script type='application/json' id='bulletin-data'>{payload}</script>")
+
+
+def history_table(a: Analysis, history: list) -> str:
+    bulletins = sorted(history, key=lambda b: b.month)[-hist.PACE_WINDOW - 1:]
+    cells = sorted({(r.client.category, r.client.chargeability) for r in a.rows},
+                   key=lambda k: (list(CATEGORIES).index(k[0]), GRID_COUNTRIES.index(k[1]) if k[1] in GRID_COUNTRIES else 9))
+    if len(bulletins) < 2 or not cells:
+        return ""
+    head = "<tr><th>Category</th>" + "".join(f"<th>{month_label(b.month)}</th>" for b in bulletins) + "</tr>"
+    body = []
+    for cat, country in cells:
+        tds, prev = [], None
+        for b in bulletins:
+            cur = b.cutoff(FINAL_ACTION, cat, country)
+            label, direction = delta(prev, cur) if prev is not None else ("", "")
+            mark = f"<span class='delta {direction}'>{label}</span>" if label else ""
+            tds.append(f"<td class='{direction}'><span class='mono'>{bulletin_code(cur)}</span>{mark}</td>")
+            prev = cur
+        body.append(f"<tr><th class='row' style='font-family:var(--sans)'><span class='cat'>{cat}</span> "
+                    f"<span class='muted small'>{e(SHORT_COUNTRY.get(country, country))}</span></th>{''.join(tds)}</tr>")
+    return (f"<section class='panel'><div class='head'><div><h2>Month by month</h2><span class='muted small'>"
+            f"Final Action cutoffs for your clients' categories, last {len(bulletins)} bulletins</span></div></div>"
+            f"<div class='body'><div class='scroll'><table class='history bulletin'><thead>{head}</thead>"
+            f"<tbody>{''.join(body)}</tbody></table></div></div></section>")
+
+
+VIEWS = [("overview", "Overview"), ("clients", "Clients"), ("waiting", "Waiting line"),
+         ("changes", "Bulletin changes"), ("chart", "Full bulletin")]
+
+
+def dashboard(a: Analysis | None, inactive: list, row_actions=None, action_html: str = "",
+              history: list | None = None) -> str:
     parts = [bulletin_bar(a, action_html)]
-    if a:
-        parts += [summary(a), attention(a), client_table(a, inactive, row_actions), bulletin_grid(a)]
+    if not a:
+        return "".join(parts)
+    history = history or [b for b in (a.previous, a.bulletin) if b]
+    waits = waits_for(a, history)
+    n_wait = sum(1 for w in waits.values() if w.days_left)
+    n_events = len({(ev.client.id, ev.kind) for ev in a.events})
+    counts = {"overview": n_events, "clients": len(a.rows), "waiting": n_wait}
+    nav = "".join(f"<button type='button' role='tab' data-view='{k}' aria-selected='{str(k == 'overview').lower()}'>{label}"
+                  + (f"<span class='count'>{counts[k]}</span>" if k in counts else "") + "</button>" for k, label in VIEWS)
+    parts.append(f"<nav class='views' role='tablist' aria-label='Dashboard sections'>{nav}</nav>")
+    views = {
+        "overview": intro("<b>What changed this month, and who needs attention.</b> Start here after each new bulletin.")
+                    + glance(a) + summary(a) + attention(a),
+        "clients": intro("<b>Every client, with how long they have left.</b> “Days left” is how far the Final Action "
+                         "cutoff still has to move to pass the client's priority date. Use the buttons to filter.")
+                   + client_table(a, inactive, row_actions, waits),
+        "waiting": intro("<b>Clients still waiting, closest first.</b> Estimates assume the cutoff keeps moving at its "
+                         "recent pace. Bulletins can stall or move back, so treat them as a rough guide.")
+                   + waiting_line(a, waits),
+        "changes": intro("<b>How the cutoffs moved between bulletins.</b> Pick any two months to compare. "
+                         "The table below shows each of your clients' categories month by month.")
+                   + compare_view(a, history) + history_table(a, history),
+        "chart": intro("<b>The whole bulletin as published</b>, with each cutoff's change since last month and how many "
+                       "of your clients sit in each box.") + bulletin_grid(a),
+    }
+    for k, _ in VIEWS:
+        hidden = "" if k == "overview" else " hidden"
+        parts.append(f"<div class='view' data-view='{k}' role='tabpanel'{hidden}>{views[k]}</div>")
     return "".join(parts)

@@ -368,8 +368,8 @@ def test_report_lists_every_change_even_without_clients(settings):
     a = evaluate.analyze([client()], dec, nov)          # the one client is F2A Mexico, unaffected
     md = render.to_markdown("X", a)
     assert "## Everything that changed since November 2026" in md
-    assert "**EB2 India:** moved back from Jan 01, 2013 to Jan 01, 2012" in md
-    assert "**F3 All other countries:** advanced from Jan 01, 2011 to Mar 01, 2011" in md
+    assert "**EB2 India:** moved back 1 year, from Jan 01, 2013 to Jan 01, 2012" in md
+    assert "**F3 All other countries:** moved forward 2 months, from Jan 01, 2011 to Mar 01, 2011" in md
     assert "F1 All other countries" not in md.split("Everything that changed")[1]   # unchanged cells left out
     assert "changed from Dates for Filing to Final Action Dates" in md
     assert "2 cutoffs moved back" in render.subject("X", a)      # EB2 India in both charts
@@ -490,3 +490,58 @@ def test_real_october_to_november_changes():
     assert moved[(FINAL_ACTION, "EB2", "ROW")] == "forward"          # 01JAN25 -> 01APR25
     assert (FINAL_ACTION, "EB4", "ROW") not in moved                 # unchanged
     assert not a.retrogressions
+
+
+# days left and bulletin history
+
+from pdtracker import dashboard, history  # noqa: E402
+
+
+def test_pace_and_days_left():
+    months = ["2026-07", "2026-08", "2026-09", "2026-10"]
+    cuts = ["01JAN01", "01FEB01", "01MAR01", "01APR01"]
+    hist_ = [bull(m, {"F3": {"MEXICO": c}}) for m, c in zip(months, cuts)]
+    pts = history.series(hist_, FINAL_ACTION, "F3", "MEXICO")
+    assert round(history.pace(pts)) == 30                       # about a month of movement per month
+    row = evaluate.analyze([client(category="F3", priority_date="2001-10-01")], hist_[-1]).rows[0]
+    w = history.wait_for(row, FINAL_ACTION, hist_, "2026-10")
+    assert w.days_left == 183 and w.estimate_month == "2027-04"
+    assert "around Apr 2027" in history.wait_words(w) and "based on only" not in history.wait_words(w)
+
+
+def test_no_estimate_when_stalled_or_reset_by_current():
+    hist_ = [bull("2026-09", {"F4": {"ROW": "01JAN08"}}), bull("2026-10", {"F4": {"ROW": "01JAN08"}})]
+    row = evaluate.analyze([client(category="F4", chargeability="Peru", priority_date="2008-06-01")], hist_[-1]).rows[0]
+    w = history.wait_for(row, FINAL_ACTION, hist_, "2026-10")
+    assert w.days_left == 152 and w.months is None
+    assert "hasn't moved forward" in history.wait_words(w)
+    assert history.pace([("2026-08", "C"), ("2026-09", date(2010, 1, 1))]) is None
+
+
+def test_delta_words():
+    assert history.delta_words(date(2020, 1, 22), date(2021, 1, 22)) == "moved forward 1 year"
+    assert history.delta_words(date(2008, 9, 8), date(2008, 9, 22)) == "moved forward 2 weeks"
+    assert history.delta_words(date(2013, 8, 1), date(2013, 7, 15)) == "moved back 17 days"
+    assert history.delta_words(date(2013, 8, 1), CURRENT).startswith("became current")
+    assert history.delta_words(CURRENT, CURRENT) == "no change"
+
+
+def test_compare_any_two_bulletins():
+    a = bull("2026-07", {"F1": {"ROW": "01JAN15"}})
+    c = bull("2026-10", {"F1": {"ROW": "01JAN14"}})
+    changes = [x for x in history.compare(a, c, ["ROW"]) if x.chart == FINAL_ACTION]
+    assert [(x.category, x.direction) for x in changes] == [("F1", "backward")]
+
+
+def test_report_and_dashboard_show_days_left_and_history():
+    oct_, nov = bulletin.parse_bulletin_pdf(REAL_OCT), bulletin.parse_bulletin_pdf(REAL_NOV)
+    c = client(id="h", name="Hernandez, Jose", category="F3", priority_date="2001-11-20")
+    a = evaluate.analyze([c], nov, oct_)
+    md = render.to_markdown("X", a, history=[oct_, nov])
+    assert "## Days left for waiting clients (1)" in md
+    assert "128 days to go; about 9 months (around Aug 2027)" in md
+    assert "Final Action cutoffs over the last 2 bulletins" in md
+    page = dashboard.dashboard(a, [], history=[oct_, nov])
+    for view in ("overview", "clients", "waiting", "changes", "chart"):
+        assert f"data-view='{view}'" in page
+    assert "128 days" in page and "id='bulletin-data'" in page

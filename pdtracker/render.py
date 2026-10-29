@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 
 from .categories import CATEGORIES, COUNTRIES
+from . import history as hist
 from .evaluate import (APPROACHING, BECAME_CURRENT, CSPA_REVIEW, IS_CURRENT, NO_LONGER_CURRENT,
                        NOT_AVAILABLE, UNKNOWN, WAITING, Analysis)
 from .models import CHART_LABELS, DATES_FOR_FILING, FINAL_ACTION, cutoff_label
@@ -41,7 +42,8 @@ def subject(office: str, analysis: Analysis) -> str:
     return f"{office}: {_month_label(analysis.bulletin.month)} Visa Bulletin, {tail}"
 
 
-def to_markdown(office: str, a: Analysis, chart_defaults: dict | None = None) -> str:
+def to_markdown(office: str, a: Analysis, chart_defaults: dict | None = None,
+                history: list | None = None) -> str:
     chart_defaults = chart_defaults or {"family": DATES_FOR_FILING, "employment": FINAL_ACTION}
     b = a.bulletin
     lines = [f"# {office}: {_month_label(b.month)} Visa Bulletin", ""]
@@ -70,10 +72,13 @@ def to_markdown(office: str, a: Analysis, chart_defaults: dict | None = None) ->
     section("Close to current", a.events_of(APPROACHING))
     section("Age-out check", a.events_of(CSPA_REVIEW))
 
+    lines += days_left_section(a, history or [a.bulletin] + ([a.previous] if a.previous else []))
     if a.previous is None:
         lines += ["This is the first bulletin on file, so there is nothing to compare against yet.", ""]
     else:
         lines += changes_section(a)
+    if history and len(history) > 1:
+        lines += history_section(a, history)
 
     lines += [f"## All active clients ({len(a.rows)})", ""]
     for r in sorted(a.rows, key=lambda r: (r.final_action != IS_CURRENT, r.client.name.lower())):
@@ -88,10 +93,42 @@ def to_markdown(office: str, a: Analysis, chart_defaults: dict | None = None) ->
 
 
 def _change_line(m) -> str:
-    verb = "moved back" if m.direction == "backward" else "advanced"
     who = f" ({len(m.clients)} of your clients)" if m.clients else ""
-    return (f"- **{m.category} {COUNTRIES[m.country]}:** {verb} from {cutoff_label(m.previous)} "
-            f"to {cutoff_label(m.current)}{who}")
+    return (f"- **{m.category} {COUNTRIES[m.country]}:** {hist.delta_words(m.previous, m.current)}, from "
+            f"{cutoff_label(m.previous)} to {cutoff_label(m.current)}{who}")
+
+
+def days_left_section(a: Analysis, history: list) -> list[str]:
+    waiting = []
+    for r in a.rows:
+        w = hist.wait_for(r, FINAL_ACTION, history, a.bulletin.month)
+        if w.days_left:
+            waiting.append((w.days_left, r, w))
+    if not waiting:
+        return []
+    lines = [f"## Days left for waiting clients ({len(waiting)})", "",
+             "How far the Final Action cutoff still has to move to pass each priority date, and a rough estimate "
+             "of when that could happen if the cutoff keeps moving at its recent pace.", ""]
+    for days, r, w in sorted(waiting, key=lambda t: t[0]):
+        lines.append(f"- **{r.client.name} ({r.client.category} {COUNTRIES[r.client.chargeability]}):** "
+                     f"{hist.days_words(days)} to go; {hist.wait_words(w)}")
+    lines.append("")
+    return lines
+
+
+def history_section(a: Analysis, history: list) -> list[str]:
+    cells = sorted({(r.client.category, r.client.chargeability) for r in a.rows},
+                   key=lambda k: (list(CATEGORIES).index(k[0]), k[1]))
+    upto = [b for b in history if b.month <= a.bulletin.month][-hist.PACE_WINDOW - 1:]
+    if len(upto) < 2 or not cells:
+        return []
+    lines = [f"## Final Action cutoffs over the last {len(upto)} bulletins (your clients' categories)", ""]
+    for cat, country in cells:
+        pts = hist.series(upto, FINAL_ACTION, cat, country)
+        trail = " → ".join(f"{cutoff_label(c)} ({_month_label(m)[:3]} {m[:4]})" for m, c in pts)
+        lines.append(f"- **{cat} {COUNTRIES[country]}:** {trail}")
+    lines.append("")
+    return lines
 
 
 def changes_section(a: Analysis) -> list[str]:
