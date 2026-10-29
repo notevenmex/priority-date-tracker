@@ -18,6 +18,15 @@ Everything office-specific lives in one YAML config file per office. Nothing is 
 
 Both versions run the same code. The only difference is the `storage.backend` setting and how the check is scheduled. See [docs/local.md](docs/local.md) and [docs/cloud.md](docs/cloud.md).
 
+## See it with sample data
+
+```
+pip install .
+pdtrack demo          # opens the dashboard with made-up clients and the real Oct/Nov 2026 bulletins
+```
+
+The dashboard shows who just became current or lost their place, who is close, age-out checks, every client's status against both charts with search and filters, and the bulletin grid with each cutoff's change since last month.
+
 ## Quick start (local)
 
 ```
@@ -52,6 +61,8 @@ pdtracker/sharepoint.py      SharePoint list store and list setup
 pdtracker/importers.py       CSV import and export
 pdtracker/notify.py          report file, 365 email, webhook
 pdtracker/tracker.py         the monthly check, shared by every version
+pdtracker/dashboard.py       dashboard layout for the local web page
+pdtracker/demo/              sample clients and the Oct/Nov 2026 bulletins for 'pdtrack demo'
 pdtracker/webui.py           local web page
 pdtracker/cli.py             pdtrack command
 cloud/azure-function/        cloud version

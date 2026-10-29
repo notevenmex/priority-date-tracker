@@ -152,6 +152,26 @@ def cmd_provision(s, a):
     print("Created " + ", ".join(created) if created else "Lists already exist.")
 
 
+def cmd_demo(a):
+    from pathlib import Path
+
+    from . import demo
+    from .stores import SqliteStore
+    from .webui import serve
+
+    folder = Path(a.dir)
+    db = folder / "demo.db"
+    s = config.parse({"office": {"name": "Demo Immigration Law"},
+                      "storage": {"sqlite_path": str(db.resolve())},
+                      "bulletin": {"source": "manual", "reminder_day": 0},
+                      "alerts": {"report_dir": str((folder / "reports").resolve())}})
+    if not db.exists():
+        demo.load(SqliteStore(db))
+        print(f"Created sample data in {db}")
+    serve(s, port=a.port)
+    return 0
+
+
 def cmd_codes(s, a):
     print("Categories:")
     for k, v in CATEGORIES.items():
@@ -175,7 +195,7 @@ def _client_args(p, required: bool):
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="pdtrack", description="Priority date tracker for immigration law offices")
-    p.add_argument("--config", "-c", required=True, help="path to this office's YAML config")
+    p.add_argument("--config", "-c", help="path to this office's YAML config (not needed for 'demo')")
     sub = p.add_subparsers(dest="command", required=True)
 
     _client_args(sub.add_parser("add", help="add a client"), required=True)
@@ -221,6 +241,9 @@ def main(argv=None):
     sv.add_argument("--port", type=int, default=8765)
     sub.add_parser("provision-sharepoint", help="create the SharePoint lists for the cloud version")
     sub.add_parser("codes", help="list category and country codes")
+    dm = sub.add_parser("demo", help="open the dashboard with made-up clients and the real Oct/Nov 2026 bulletins")
+    dm.add_argument("--dir", default="pdtracker-demo", help="folder for the demo database (default ./pdtracker-demo)")
+    dm.add_argument("--port", type=int, default=8765)
 
     a = p.parse_args(argv)
     handlers = {
@@ -231,6 +254,10 @@ def main(argv=None):
     bulletin_handlers = {"fetch": cmd_bulletin_fetch, "template": cmd_bulletin_template, "load": cmd_bulletin_load,
                          "set-chart": cmd_bulletin_chart, "list": cmd_bulletin_list}
     try:
+        if a.command == "demo":
+            return cmd_demo(a)
+        if not a.config:
+            p.error("--config is required")
         s = config.load(a.config)
         handler = bulletin_handlers[a.bulletin_command] if a.command == "bulletin" else handlers[a.command]
         handler(s, a)
