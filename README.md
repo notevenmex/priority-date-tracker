@@ -42,7 +42,7 @@ pdtrack -c config/myoffice.yaml serve                  # opens the web page
 Both versions take manual input, and both are built around three plug-in points so automatic sources can be added without touching the core:
 
 - **Bulletin source** (`pdtracker/bulletin.py`): `state_dept` downloads the bulletin PDF from travel.state.gov (falling back to the web page) and reads both charts from it. Staff can also add the PDF themselves: upload it on the local web page, drop it in a watched folder (a local folder or a SharePoint folder), run `pdtrack bulletin load file.pdf`, or post it to the cloud `/api/bulletin` endpoint. If next month's bulletin isn't in by the reminder day (the 20th by default), the tracker asks staff for it. If the State Department moves its files, the URLs are in config.
-- **Client feed** (`pdtracker/importers.py`): `pdtrack import` reads a CSV export from any case management system, using a column mapping in config. A direct sync from a database or API is a small class with a `rows()` method.
+- **Client feed** (`pdtracker/importers.py`): `pdtrack import` reads a CSV export from any case management system, using a column mapping in config. A direct sync from a database or API is a small class with a `rows()` method. `pdtrack import-docketwise` (and the Import clients page) reads a Docketwise matters export directly; see `pdtracker/docketwise.py`.
 - **Store** (`pdtracker/stores.py`): SQLite and SharePoint lists today. Pointing the tracker at a case system's own database means writing one more store with the same nine methods.
 
 See [docs/how-it-works.md](docs/how-it-works.md) for the rules the tracker applies and how to add a source.
@@ -59,6 +59,7 @@ pdtracker/render.py          the monthly report
 pdtracker/stores.py          SQLite and in-memory stores
 pdtracker/sharepoint.py      SharePoint list store and list setup
 pdtracker/importers.py       CSV import and export
+pdtracker/docketwise.py      Docketwise matters export: picks green card matters, fills gaps, worklist
 pdtracker/notify.py          report file, 365 email, webhook
 pdtracker/tracker.py         the monthly check, shared by every version
 pdtracker/dashboard.py       dashboard layout for the local web page

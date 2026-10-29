@@ -146,7 +146,7 @@ def analyze(clients: list[Client], bulletin: Bulletin, previous: Bulletin | None
                 events.append(Event(BECAME_CURRENT, row.client, chart, f"Current under {label}."))
             elif was_s == IS_CURRENT and now_s in (WAITING, NOT_AVAILABLE):
                 events.append(Event(NO_LONGER_CURRENT, row.client, chart,
-                                    f"No longer current under {label} (cutoff moved back)."))
+                                    f"No longer current under {label} (retrogression)."))
         if row.days_to_cutoff is not None and 0 <= row.days_to_cutoff <= approaching_days:
             events.append(Event(APPROACHING, row.client, FINAL_ACTION,
                                 f"{row.days_to_cutoff} days from the Final Action cutoff."))

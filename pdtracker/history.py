@@ -75,21 +75,23 @@ def _amount(days: int) -> str:
 
 
 def delta_words(before, after) -> str:
-    """Plain words for how one cutoff moved: 'moved forward 1 month', 'became current', 'no change'."""
+    """How one cutoff moved, in the words attorneys use: 'advanced 1 month', 'retrogressed 2 weeks', 'no movement'."""
     if before is None:
         return "new this month"
     if after is None:
         return "no longer listed"
     if before == after:
-        return "no change"
+        return "no movement"
     if after == CURRENT:
-        return "became current (everyone can move ahead)"
+        return "became current (C)"
     if after == UNAVAILABLE:
-        return "became unavailable (no one can move ahead)"
-    if before in (CURRENT, UNAVAILABLE):
-        return "now has a cutoff date"
+        return "became unavailable (U)"
+    if before == CURRENT:
+        return "retrogressed from current to a cutoff date"
+    if before == UNAVAILABLE:
+        return "available again, up to a cutoff date"
     days = (after - before).days
-    return f"moved {'forward' if days > 0 else 'back'} {_amount(days)}"
+    return f"{'advanced' if days > 0 else 'retrogressed'} {_amount(days)}"
 
 
 def days_words(days: int) -> str:

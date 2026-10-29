@@ -27,6 +27,10 @@ CLIENT_COLUMNS = [
     {"name": "ExternalId", "text": {}},
     {"name": "Active", "boolean": {}, "defaultValue": {"value": "1"}},
     {"name": "Notes", "text": {"allowMultipleLines": True}},
+    {"name": "Petitioner", "text": {}},
+    {"name": "CaseStatus", "text": {}},
+    {"name": "Attorney", "text": {}},
+    {"name": "OutsideStatus", "text": {}},
     # Written by the tracker
     {"name": "FinalActionStatus", "text": {}},
     {"name": "FilingStatus", "text": {}},
@@ -77,7 +81,9 @@ class SharePointStore:
                 case_type=f.get("CaseType") or "", receipt_number=f.get("ReceiptNumber") or "",
                 beneficiary_dob=self._date(f.get("BeneficiaryDOB")),
                 responsible_email=f.get("ResponsibleEmail") or "", notes=f.get("Notes") or "",
-                active=bool(f.get("Active", True)), external_id=f.get("ExternalId") or "")
+                active=bool(f.get("Active", True)), external_id=f.get("ExternalId") or "",
+                petitioner=f.get("Petitioner") or "", case_status=f.get("CaseStatus") or "",
+                attorney=f.get("Attorney") or "", outside_status=f.get("OutsideStatus") or "")
         except (ValueError, TypeError):
             return None        # half-filled row; skipped rather than failing the whole run
 
@@ -87,7 +93,8 @@ class SharePointStore:
             "PriorityDate": self._date_out(c.priority_date), "CaseType": c.case_type,
             "ReceiptNumber": c.receipt_number, "BeneficiaryDOB": self._date_out(c.beneficiary_dob),
             "ResponsibleEmail": c.responsible_email, "Notes": c.notes, "Active": c.active,
-            "ExternalId": c.external_id,
+            "ExternalId": c.external_id, "Petitioner": c.petitioner, "CaseStatus": c.case_status,
+            "Attorney": c.attorney, "OutsideStatus": c.outside_status,
         }
 
     # clients
@@ -161,11 +168,17 @@ class SharePointStore:
 
 
 def provision(graph: GraphClient, site_id: str, clients_list: str, bulletins_list: str) -> list[str]:
-    """Create the two lists if they don't exist. Safe to re-run. Returns what it created."""
+    """Create the two lists if they don't exist, and add any columns a newer version needs.
+    Safe to re-run. Returns what it created."""
     created = []
     for name, columns in ((clients_list, CLIENT_COLUMNS), (bulletins_list, BULLETIN_COLUMNS)):
         try:
             graph.get(f"/sites/{site_id}/lists/{name}")
+            have = {c.get("name") for c in graph.get_all(f"/sites/{site_id}/lists/{name}/columns")}
+            for col in columns:
+                if col["name"] not in have:
+                    graph.post(f"/sites/{site_id}/lists/{name}/columns", col)
+                    created.append(f"{name}.{col['name']}")
             continue
         except GraphError as e:
             if e.status != 404:

@@ -14,10 +14,10 @@ from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import dashboard, render, tracker
+from . import dashboard, docketwise, importers, render, tracker
 from .categories import CATEGORIES, COUNTRIES
 from .evaluate import IS_CURRENT
-from .models import CHART_LABELS, CHARTS, Bulletin, Client, cutoff_label, cutoff_str, month_key
+from .models import CHART_LABELS, CHARTS, Bulletin, Client, cutoff_label, cutoff_str, month_key, parse_date
 from .stores import previous_bulletin
 
 STATUS_CLASS = {IS_CURRENT: "ok"}
@@ -33,6 +33,7 @@ class App:
         self.store = tracker.store_for(settings)
         self.token = secrets.token_urlsafe(16)
         self.lock = threading.Lock()
+        self.pending: list[docketwise.Matter] = []     # matters from the last upload still missing information
 
     def page(self, title: str, body: str, message: str = "", active: str = "", kind: str = "") -> str:
         return dashboard.shell(title, self.s.office_name, body, active, message, kind)
@@ -80,6 +81,92 @@ class App:
                 top = dashboard.client_profile(row, a)
         back = "<p><a href='/#profiles'>← All clients</a></p>"
         return back + top + self.panel(f"Edit {c.name}", self.client_form(c))
+
+    def import_page(self, message="", kind="") -> str:
+        upload = self.panel("Upload a Docketwise matters export", (
+            f"<form method='post' action='/import/docketwise' enctype='multipart/form-data' class='filters'>{self._hidden()}"
+            "<input type='file' name='csv' accept='.csv,text/csv' required> <button>Read the export</button></form>"
+            "<p class='muted small'>In Docketwise: Reports, Matter Reports, add the Applicant, Preference category, "
+            "Priority date and country columns, then export to CSV. A plain Matters export works too; anything it "
+            "lacks is listed for you to fill in. Only green card matters that wait on the Visa Bulletin are kept.</p>"))
+        generic = self.panel("Or upload the tracker's own spreadsheet", (
+            f"<form method='post' action='/import/csv' enctype='multipart/form-data' class='filters'>{self._hidden()}"
+            "<input type='file' name='csv' accept='.csv,text/csv' required> <button>Import</button></form>"
+            "<p class='muted small'>Columns: name, category, chargeability, priority_date, and optionally case_type, "
+            "receipt_number, petitioner, case_status, attorney, notes, external_id. The spreadsheet from "
+            "“Download as a spreadsheet” is already in this layout.</p>"))
+        return self.page("Import clients", self.worklist() + upload + generic, message, "import", kind)
+
+    def worklist(self) -> str:
+        todo = [m for m in self.pending if m.kind == docketwise.PREFERENCE and not m.complete]
+        if not todo:
+            return ""
+        import base64
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "worklist.csv"
+            docketwise.write_worklist(self.pending, path)
+            data = base64.b64encode(path.read_bytes()).decode()
+        cats = {"": "Choose…", **CATEGORIES}
+        countries = {"": "Choose…", **COUNTRIES}
+
+        def sel(name, options, chosen):
+            return (f"<select name='{name}' aria-label='{name.split('_')[0]}'>" + "".join(
+                f"<option value='{_e(k)}'{' selected' if k == chosen else ''}>{_e(k + ' · ' + v if k else v)}</option>"
+                for k, v in options.items()) + "</select>")
+
+        rows = []
+        for i, m in enumerate(self.pending):
+            if m.kind != docketwise.PREFERENCE or m.complete:
+                continue
+            pd = m.priority_date.isoformat() if m.priority_date else ""
+            ctx = " · ".join(x for x in (m.type, m.petitioner, m.status) if x)
+            hint = f"<span class='sub'>{_e('; '.join(m.notes))}</span>" if m.notes else ""
+            rows.append(f"<tr><td class='client'><b>{_e(m.applicant)}</b><span class='sub'>{_e(ctx)}</span>{hint}</td>"
+                        f"<td><input type='date' name='pd_{i}' value='{pd}' aria-label='Priority date'></td>"
+                        f"<td>{sel(f'cat_{i}', cats, m.category)}</td><td>{sel(f'ctry_{i}', countries, m.chargeability)}</td></tr>")
+        return (f"<section class='panel'><div class='head'><div><h2>Finish these clients ({len(todo)})</h2>"
+                "<span class='muted small'>The export didn't have everything the tracker needs. Fill in what you know "
+                "and save; rows left incomplete stay here. Values already filled in were read from the matter, "
+                "so check them.</span></div>"
+                f"<a class='btn ghost' download='clients-to-finish.csv' href='data:text/csv;base64,{data}'>"
+                "Download as a spreadsheet</a></div>"
+                f"<form method='post' action='/import/finish'>{self._hidden()}<div class='scroll'><table class='worklist'>"
+                "<thead><tr><th>Client and matter</th><th>Priority date</th><th>Category</th><th>Chargeability</th></tr></thead>"
+                f"<tbody>{''.join(rows)}</tbody></table></div><div class='body' style='padding:14px 16px'><button>Save the completed rows</button>"
+                "</div></form></section>")
+
+    def import_docketwise(self, form: dict) -> str:
+        import tempfile
+        from pathlib import Path
+        upload = form.get("csv")
+        if not isinstance(upload, tuple):
+            raise ValueError("Choose the CSV file first.")
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "export.csv"
+            path.write_bytes(upload[1])
+            matters = docketwise.read(path, self.s.import_columns)
+        result = docketwise.sync(self.store, matters)
+        self.pending = matters
+        n = docketwise.summary(matters)
+        left = n["preference"] - n["complete"]
+        return (f"{n['preference']} clients wait on the Visa Bulletin. Also in the export: immediate relatives "
+                f"({n['immediate']}), finished cases ({n['finished']}) and other matter types ({n['other']}). "
+                f"Added {result['added']} and updated {result['updated']} clients. "
+                + (f"{left} need a priority date, category or chargeability before they can be tracked." if left else ""))
+
+    def finish_pending(self, form: dict) -> str:
+        for i, m in enumerate(self.pending):
+            if m.kind != docketwise.PREFERENCE or m.complete:
+                continue
+            m.priority_date = parse_date(form.get(f"pd_{i}")) or m.priority_date
+            m.category = form.get(f"cat_{i}") or m.category
+            m.chargeability = form.get(f"ctry_{i}") or m.chargeability
+        docketwise.link_derivatives(self.pending)        # derivatives pick up what was entered for the principal
+        result = docketwise.sync(self.store, self.pending)
+        left = sum(1 for m in self.pending if m.kind == docketwise.PREFERENCE and not m.complete)
+        return f"Saved {result['added'] + result['updated']} clients. {left} still need information."
 
     def home(self, message="") -> str:
         months = self.store.bulletin_months()
@@ -190,6 +277,8 @@ class App:
                         return 200, self.bulletin_form(query.get("month"), query.get("msg", "")), None
                     if parts == ["report"]:
                         return 200, self.report(), None
+                    if parts == ["import"]:
+                        return 200, self.import_page(query.get("msg", "")), None
                     if len(parts) == 2 and parts[0] == "client":
                         c = self.store.get_client(parts[1])
                         if c:
@@ -225,6 +314,22 @@ class App:
                     result = tracker.check(self.store, tracker.StoredSource(self.store), self.s,
                                            tracker.notifiers_for(self.s), month=b.month)
                     return 303, "", f"/?msg=Read the {b.month} bulletin from {name}. {result.summary}"
+                if parts == ["import", "docketwise"]:
+                    return 303, "", "/import?msg=" + self.import_docketwise(form)
+                if parts == ["import", "finish"]:
+                    return 303, "", "/import?msg=" + self.finish_pending(form)
+                if parts == ["import", "csv"]:
+                    import tempfile
+                    from pathlib import Path
+                    upload = form.get("csv")
+                    if not isinstance(upload, tuple):
+                        raise ValueError("Choose the CSV file first.")
+                    with tempfile.TemporaryDirectory() as d:
+                        path = Path(d) / "clients.csv"
+                        path.write_bytes(upload[1])
+                        result = importers.sync(self.store, importers.CsvFeed(path, self.s.import_columns))
+                    skipped = f" Skipped {len(result['errors'])} incomplete rows." if result["errors"] else ""
+                    return 303, "", f"/import?msg=Added {result['added']}, updated {result['updated']}.{skipped}"
                 if parts == ["bulletin"]:
                     month = self.save_bulletin(form)
                     return 303, "", f"/bulletin?month={month}&msg=Saved the {month} bulletin"

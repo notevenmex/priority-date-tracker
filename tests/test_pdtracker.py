@@ -368,11 +368,11 @@ def test_report_lists_every_change_even_without_clients(settings):
     a = evaluate.analyze([client()], dec, nov)          # the one client is F2A Mexico, unaffected
     md = render.to_markdown("X", a)
     assert "## Everything that changed since November 2026" in md
-    assert "**EB2 India:** moved back 1 year, from Jan 01, 2013 to Jan 01, 2012" in md
-    assert "**F3 All other countries:** moved forward 2 months, from Jan 01, 2011 to Mar 01, 2011" in md
+    assert "**EB2 India:** retrogressed 1 year, from Jan 01, 2013 to Jan 01, 2012" in md
+    assert "**F3 All other countries:** advanced 2 months, from Jan 01, 2011 to Mar 01, 2011" in md
     assert "F1 All other countries" not in md.split("Everything that changed")[1]   # unchanged cells left out
     assert "changed from Dates for Filing to Final Action Dates" in md
-    assert "2 cutoffs moved back" in render.subject("X", a)      # EB2 India in both charts
+    assert "2 cutoffs retrogressed" in render.subject("X", a)      # EB2 India in both charts
     assert "<h4>" in render.to_html(md)
 
 
@@ -504,11 +504,12 @@ def test_series_skips_months_that_dont_list_the_cell():
 
 
 def test_delta_words():
-    assert history.delta_words(date(2020, 1, 22), date(2021, 1, 22)) == "moved forward 1 year"
-    assert history.delta_words(date(2008, 9, 8), date(2008, 9, 22)) == "moved forward 2 weeks"
-    assert history.delta_words(date(2013, 8, 1), date(2013, 7, 15)) == "moved back 17 days"
+    assert history.delta_words(date(2020, 1, 22), date(2021, 1, 22)) == "advanced 1 year"
+    assert history.delta_words(date(2008, 9, 8), date(2008, 9, 22)) == "advanced 2 weeks"
+    assert history.delta_words(date(2013, 8, 1), date(2013, 7, 15)) == "retrogressed 17 days"
     assert history.delta_words(date(2013, 8, 1), CURRENT).startswith("became current")
-    assert history.delta_words(CURRENT, CURRENT) == "no change"
+    assert history.delta_words(CURRENT, CURRENT) == "no movement"
+    assert history.delta_words(CURRENT, date(2020, 1, 1)).startswith("retrogressed")
 
 
 def test_compare_any_two_bulletins():
@@ -523,9 +524,9 @@ def test_report_and_dashboard_show_days_left_and_history():
     c = client(id="h", name="Hernandez, Jose", category="F3", priority_date="2001-11-20")
     a = evaluate.analyze([c], nov, oct_)
     md = render.to_markdown("X", a, history=[oct_, nov])
-    assert "## Days left for waiting clients (1)" in md
-    assert ("128 days to go. Final Action cutoff Jul 01, 2001 in October 2026, Jul 15, 2001 in November 2026 "
-            "(moved forward 2 weeks)") in md
+    assert "## Days until current (1 not yet current)" in md
+    assert ("128 days until current. Final Action cutoff advanced 2 weeks: Jul 01, 2001 (October 2026) "
+            "to Jul 15, 2001 (November 2026)") in md
     assert "estimate" not in md.lower() and "pace" not in md.lower()
     assert "Final Action cutoffs over the last 2 bulletins" in md
     page = dashboard.dashboard(a, [], history=[oct_, nov])
@@ -535,6 +536,65 @@ def test_report_and_dashboard_show_days_left_and_history():
     assert "Estimate" not in page and "pace" not in page.lower()
     # the client's profile puts last month's cutoff next to this month's, with the change in words
     profile = page[page.index("<article class='profile'"):]
-    assert "Last month · October 2026" in profile and "01JUL01" in profile
-    assert "This month · November 2026" in profile and "15JUL01" in profile
-    assert "Moved forward 2 weeks" in profile
+    assert "October 2026 bulletin" in profile and "01JUL01" in profile
+    assert "November 2026 bulletin" in profile and "15JUL01" in profile
+    assert "Advanced 2 weeks" in profile and "until current" in profile
+
+
+# Docketwise matters export
+
+from pdtracker import docketwise, stores  # noqa: E402
+
+DW_MATTERS = FIXTURES / "docketwise_matters_sample.csv"
+DW_REPORT = FIXTURES / "docketwise_report_sample.csv"
+
+
+def test_docketwise_matters_export_sorts_and_infers():
+    ms = {m.applicant: m for m in docketwise.read(DW_MATTERS)}
+    assert ms["Test Person"].kind == docketwise.OTHER                 # H-1B is not a green card matter
+    jane = ms["DOE, Jane"]
+    assert jane.kind == docketwise.PREFERENCE and (jane.category, jane.chargeability) == ("EB2", "INDIA")
+    assert jane.status == "Biometrics scheduled" and "I-140 + AOS" in jane.type      # I-140 and AOS combined
+    assert jane.missing == ["priority date"] and jane.outside_status == "Not current"
+    john = ms["DOE, John"]
+    assert (john.category, john.chargeability) == ("EB2", "INDIA") and "derivative of DOE, Jane" in john.notes[-1]
+    assert ms["Sam Sample"].kind == docketwise.IMMEDIATE
+    assert ms["ROE, Rita"].category == "SR" and ms["ROE, Rita"].chargeability == ""     # never guess a country
+    assert ms["POE, Pat"].kind == docketwise.DONE
+    assert "Lee Example" in ms and ms["Lee Example"].petitioner == ""                    # name from the contact
+    assert "Old matter" not in ms                                                         # archived
+
+
+def test_docketwise_worklist_round_trip(tmp_path):
+    matters = docketwise.read(DW_MATTERS)
+    store = stores.MemoryStore()
+    assert docketwise.sync(store, matters) == {"added": 0, "updated": 0}
+    path = tmp_path / "todo.csv"
+    assert docketwise.write_worklist(matters, path) == 4
+    text = path.read_text().replace("DOE, Jane\",,EB2", "DOE, Jane\",2015-03-01,EB2")
+    path.write_text(text)
+    result = importers.sync(store, importers.CsvFeed(path))
+    assert result["added"] == 1 and len(result["errors"]) == 3
+    jane = store.list_clients()[0]
+    assert jane.petitioner == "Example Tech Inc." and jane.attorney == "CD" and jane.outside_status == "Not current"
+
+
+def test_docketwise_matter_report_with_dates(tmp_path):
+    matters = docketwise.read(DW_REPORT)
+    assert all(m.complete for m in matters)
+    store = stores.MemoryStore()
+    assert docketwise.sync(store, matters)["added"] == 2
+    assert docketwise.sync(store, matters) == {"added": 0, "updated": 2}                # re-import updates
+    ana = next(c for c in store.list_clients() if c.name == "Smith, Ana")
+    assert (ana.category, ana.chargeability, str(ana.priority_date)) == ("EB3", "PHILIPPINES", "2023-03-15")
+
+
+def test_profile_flags_case_system_disagreement():
+    oct_, nov = bulletin.parse_bulletin_pdf(REAL_OCT), bulletin.parse_bulletin_pdf(REAL_NOV)
+    c = client(id="m", name="Mismatch, Mo", category="F3", priority_date="2005-01-01", outside_status="Current",
+               petitioner="Mismatch, Mia", case_status="NVC processing")
+    a = evaluate.analyze([c], nov, oct_)
+    html_ = dashboard.client_profile(a.rows[0], a)
+    assert "class='mismatch'" in html_ and "Petitioner" in html_ and "NVC processing" in html_
+    c.outside_status = "Not current"
+    assert "class='mismatch'" not in dashboard.client_profile(evaluate.analyze([c], nov, oct_).rows[0], a)

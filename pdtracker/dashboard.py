@@ -152,6 +152,12 @@ td.days{min-width:150px}
 .pill.lg{font-size:1rem;padding:5px 14px}
 .profile dl.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:0}
 .profile dl.facts div{background:var(--soft);border-radius:10px;padding:12px 14px}
+.profile dl.matter{display:flex;flex-wrap:wrap;gap:8px 28px;margin:0;padding:0 2px}
+.profile dl.matter dd{font-size:1.05rem;font-weight:500}
+.mismatch{margin:0;padding:12px 14px;border-radius:10px;background:var(--warn-bg);color:var(--ink);font-size:1rem;
+  border-left:4px solid var(--warn)}
+table.worklist td{vertical-align:middle} table.worklist td.client{min-width:240px}
+table.worklist input,table.worklist select{width:100%;min-width:130px}
 .profile dt{font-size:.85rem;color:var(--muted);font-weight:600;letter-spacing:.02em}
 .profile dd{margin:4px 0 0;font-size:1.3rem;font-weight:600}
 .profile dd .cat{font-size:1.2rem}
@@ -244,9 +250,9 @@ FILTER_JS = """
     if(days>=28){var m=Math.round(days/30.44); return m+' month'+(m!==1?'s':'');}
     if(days>=7&&days%7===0){var w=days/7; return w+' week'+(w!==1?'s':'');}
     return days+' day'+(days!==1?'s':''); }
-  function words(a,b){ if(!a) return 'new this month'; if(!b) return 'no longer listed'; if(a===b) return 'no change';
-    if(b==='C') return 'became current'; if(b==='U') return 'became unavailable'; if(a==='C'||a==='U') return 'now has a cutoff date';
-    var d=Math.round((parse(b)-parse(a))/864e5); return 'moved '+(d>0?'forward ':'back ')+amount(d); }
+  function words(a,b){ if(!a) return 'new this month'; if(!b) return 'no longer listed'; if(a===b) return 'no movement';
+    if(b==='C') return 'became current (C)'; if(b==='U') return 'became unavailable (U)'; if(a==='C') return 'retrogressed from current to a cutoff date'; if(a==='U') return 'available again, up to a cutoff date';
+    var d=Math.round((parse(b)-parse(a))/864e5); return (d>0?'advanced ':'retrogressed ')+amount(d); }
   function esc(t){var x=document.createElement('span'); x.textContent=t; return x.innerHTML;}
   function render(){
     var A=D.bulletins[fromSel.value], B=D.bulletins[toSel.value], chart=chartSel.value, groups={fwd:[],back:[],same:[]};
@@ -258,11 +264,11 @@ FILTER_JS = """
       groups[g].push('<li><span class="k">'+esc(cat)+' · '+esc(D.countryNames[ct])+'</span>'+(n?' <span class="dot" title="your clients">'+n+'</span>':'')+
         '<br><span class="mono">'+code(a)+' → '+code(b)+'</span> <span class="muted">'+esc(words(a,b))+'</span></li>');
     });});
-    [['fwd','Moved forward'],['back','Moved back'],['same','No change']].forEach(function(g){
+    [['fwd','Advanced'],['back','Retrogressed'],['same','No movement']].forEach(function(g){
       var el=document.getElementById('cmp-'+g[0]);
       el.querySelector('.n').textContent=groups[g[0]].length;
       el.querySelector('.items').innerHTML = groups[g[0]].length ? '<ul>'+groups[g[0]].join('')+'</ul>'
-        : '<p class="none">Nothing '+(g[0]==='same'?'unchanged':g[1].toLowerCase())+'.</p>';
+        : '<p class="none">'+(g[0]==='same'?'Every cutoff moved.':'Nothing '+g[1].toLowerCase()+'.')+'</p>';
     });
     document.getElementById('cmp-title').textContent = D.labels[fromSel.value]+' → '+D.labels[toSel.value];
   }
@@ -273,13 +279,13 @@ FILTER_JS = """
 
 STATUS = {
     IS_CURRENT: ("Current", "ok"),
-    WAITING: ("Waiting", "warn"),
+    WAITING: ("Not current", "warn"),
     NOT_AVAILABLE: ("Unavailable", "bad"),
     UNKNOWN: ("Not listed", ""),
 }
 EVENT = {
     BECAME_CURRENT: ("Newly current", "ok"),
-    NO_LONGER_CURRENT: ("Lost place", "bad"),
+    NO_LONGER_CURRENT: ("Retrogressed", "bad"),
     APPROACHING: ("Close to current", "warn"),
     CSPA_REVIEW: ("Age-out check", "info"),
 }
@@ -343,7 +349,8 @@ def delta(prev, cur) -> tuple[str, str]:
 
 def shell(title: str, office: str, body: str, active: str = "clients", message: str = "",
           message_kind: str = "", script: str = "") -> str:
-    tabs = [("clients", "/", "Dashboard"), ("bulletin", "/bulletin", "Enter a bulletin"), ("report", "/report", "Report")]
+    tabs = [("clients", "/", "Dashboard"), ("bulletin", "/bulletin", "Enter a bulletin"),
+            ("import", "/import", "Import clients"), ("report", "/report", "Report")]
     nav = "".join(f'<a href="{href}"{" aria-current=\"page\"" if key == active else ""}>{label}</a>'
                   for key, href, label in tabs)
     note = f'<div class="notice {e(message_kind)}" role="status">{e(message)}</div>' if message else ""
@@ -373,8 +380,8 @@ def summary(a: Analysis) -> str:
     prev = f"since {month_label(a.previous.month)}" if a.previous else "first bulletin on file"
     return ("<div class='tiles'>"
             + tile("ok", count(BECAME_CURRENT), "Newly current", prev)
-            + tile("bad", count(NO_LONGER_CURRENT), "Lost their place",
-                   f"{back} cutoff{'s' if back != 1 else ''} moved back overall" if a.previous else "nothing to compare")
+            + tile("bad", count(NO_LONGER_CURRENT), "Retrogressed",
+                   f"{back} cutoff{'s' if back != 1 else ''} retrogressed overall" if a.previous else "nothing to compare")
             + tile("warn", count(APPROACHING), "Close to current", "within the watch window")
             + tile("info", count(CSPA_REVIEW), "Age-out checks", "beneficiary turns 21 soon")
             + tile("acc", can_file, "Can file I-485", f"of {len(a.rows)} active clients")
@@ -392,7 +399,7 @@ def attention(a: Analysis) -> str:
             if ev.kind == BECAME_CURRENT:
                 first.detail = "Current under both Final Action and Dates for Filing."
             elif ev.kind == NO_LONGER_CURRENT:
-                first.detail = "No longer current under either chart (cutoffs moved back)."
+                first.detail = "No longer current under either chart (retrogression)."
         else:
             merged[key] = type(ev)(ev.kind, ev.client, ev.chart, ev.detail)
     events = sorted(merged.values(), key=lambda ev: (order.index(ev.kind), ev.client.name.lower()))
@@ -456,7 +463,7 @@ def client_table(a: Analysis, inactive: list, row_actions=None) -> str:
                     f"<td class='client'>{name}<span class='sub'>Not tracked (case closed)</span></td>"
                     f"<td><span class='cat'>{e(c.category)}</span><span class='sub'>{e(COUNTRIES[c.chargeability])}</span></td>"
                     f"<td class='mono'>{long_date(c.priority_date)}</td><td colspan='4' class='muted small'>–</td>{actions}</tr>")
-    chips = [("all", "All"), (IS_CURRENT, "Current"), (WAITING, "Waiting"), ("i485", "Can file I-485"),
+    chips = [("all", "All"), (IS_CURRENT, "Current"), (WAITING, "Not current"), ("i485", "Can file I-485"),
              ("family", "Family"), ("employment", "Employment")]
     if inactive:
         chips.append(("inactive", "Not tracked"))
@@ -504,7 +511,7 @@ def bulletin_grid(a: Analysis) -> str:
                    f"{CHART_LABELS[c]}</button>" for i, c in enumerate((FINAL_ACTION, DATES_FOR_FILING)))
     compare = f"compared with {month_label(prev.month)}" if prev else "no earlier bulletin to compare"
     legend = ("<div class='legend'><span><i class='sw' style='background:var(--ok-bg)'></i>advanced</span>"
-              "<span><i class='sw' style='background:var(--bad-bg)'></i>moved back</span>"
+              "<span><i class='sw' style='background:var(--bad-bg)'></i>retrogressed</span>"
               "<span><span class='dot'>2</span>your clients in this cell</span>"
               "<span class='mono'>C current · U unavailable</span></div>")
     return (f"<section class='panel'><div class='head'><div><h2>{month_label(b.month)} bulletin</h2>"
@@ -538,59 +545,59 @@ def glance(a: Analysis) -> str:
     back = len(a.retrogressions)
     cur = len({ev.client.id for ev in a.events_of(BECAME_CURRENT)})
     lost = len({ev.client.id for ev in a.events_of(NO_LONGER_CURRENT)})
-    parts = [f"Since the {month_label(a.previous.month)} bulletin, <b>{fwd}</b> cutoff{'s' if fwd != 1 else ''} moved forward "
-             f"and <b>{back}</b> moved back."]
+    parts = [f"Since the {month_label(a.previous.month)} bulletin, <b>{fwd}</b> cutoff{'s' if fwd != 1 else ''} advanced "
+             f"and <b>{back}</b> retrogressed."]
     if cur:
         parts.append(f"<b>{cur}</b> of your clients became current.")
     if lost:
-        parts.append(f"<b>{lost}</b> lost their place.")
+        parts.append(f"<b>{lost}</b> of your clients retrogressed.")
     if not cur and not lost:
         parts.append("None of your clients changed status.")
     return f"<p class='glance'>{' '.join(parts)} <a href='#changes' data-goto='changes'>See every change</a></p>"
 
 
-CHART_TITLES = {FINAL_ACTION: "Final Action Dates", DATES_FOR_FILING: "Dates for Filing"}
+CHART_TITLES = {FINAL_ACTION: "Final Action Date", DATES_FOR_FILING: "Date for Filing"}
 
 
 def _standing(status_now: str, pd, cut) -> str:
     if status_now == IS_CURRENT:
-        return "<p class='standing ok'><b>Current</b> <span>the cutoff has passed this priority date</span></p>"
+        return ("<p class='standing ok'><b>Current</b> <span>the priority date is earlier than the cutoff</span></p>")
     if status_now == WAITING:
         days = (pd - cut).days
-        return (f"<p class='standing warn'><b>{hist.days_words(days)}</b> <span>still to go before the cutoff "
-                f"passes this priority date</span></p>")
+        return (f"<p class='standing warn'><b>{hist.days_words(days)}</b> <span>until current: the cutoff must "
+                f"advance {hist.days_words(days)} to reach this priority date</span></p>")
     if status_now == NOT_AVAILABLE:
-        return "<p class='standing bad'><b>Unavailable</b> <span>no visas in this category this month</span></p>"
+        return "<p class='standing bad'><b>Unavailable</b> <span>no visa numbers in this category this month (U)</span></p>"
     return "<p class='standing'><b>Not listed</b> <span>this category isn't in the bulletin</span></p>"
 
 
 def _cut(label: str, cutoff, now: bool = False) -> str:
-    plain = ("everyone is current" if cutoff == CURRENT else "no visas available" if cutoff == UNAVAILABLE
+    plain = ("current" if cutoff == CURRENT else "unavailable" if cutoff == UNAVAILABLE
              else "not listed" if cutoff is None else long_date(cutoff))
     return (f"<div class='cut{' now' if now else ''}'><span class='lbl'>{label}</span>"
             f"<span class='val mono'>{bulletin_code(cutoff)}</span><span class='plain'>{plain}</span></div>")
 
 
 def chart_block(r, a: Analysis, chart: str) -> str:
-    """One chart in a client profile: last month's cutoff, this month's, and the change in plain words."""
+    """One chart in a client profile: the previous bulletin's cutoff, this one's, and the movement."""
     c = r.client
     now = r.cutoffs[chart]
     status_now = getattr(r, chart)
-    uses = (" <span class='pill info'>USCIS filing chart this month</span>" if r.uscis_chart == chart else "")
-    this_month = _cut(f"This month · {month_label(a.bulletin.month)}", now, now=True)
+    uses = " <span class='pill info'>USCIS chart for I-485 this month</span>" if r.uscis_chart == chart else ""
+    this_month = _cut(f"{month_label(a.bulletin.month)} bulletin", now, now=True)
     if a.previous:
         before = a.previous.cutoff(chart, c.category, c.chargeability)
         _, direction = delta(before, now)
         words = hist.delta_words(before, now)
-        status_before = evaluate_status(c.priority_date, before)
-        moved = ""
-        if status_before != status_now:
-            moved = (f"<p class='flip'>Last month this client was <b>{STATUS[status_before][0].lower()}</b>; "
-                     f"now <b>{STATUS[status_now][0].lower()}</b>.</p>")
-        pair = (_cut(f"Last month · {month_label(a.previous.month)}", before)
-                + f"<div class='arrow' aria-hidden='true'>→</div>{this_month}")
         tone = {"up": "fwd", "down": "back"}.get(direction, "same")
-        change = f"<p class='change {tone}'>{e(words[:1].upper() + words[1:])}</p>{moved}"
+        status_before = evaluate_status(c.priority_date, before)
+        flip = ""
+        if status_before != status_now:
+            flip = (f"<p class='flip'>{STATUS[status_before][0]} in {month_label(a.previous.month)}, "
+                    f"<b>{STATUS[status_now][0].lower()}</b> now.</p>")
+        pair = (_cut(f"{month_label(a.previous.month)} bulletin", before)
+                + f"<div class='arrow' aria-hidden='true'>→</div>{this_month}")
+        change = f"<p class='change {tone}'>{e(words[:1].upper() + words[1:])}</p>{flip}"
     else:
         pair = this_month + "<div></div><div></div>"
         change = "<p class='change same'>No earlier bulletin on file to compare with.</p>"
@@ -598,20 +605,39 @@ def chart_block(r, a: Analysis, chart: str) -> str:
             f"{change}{_standing(status_now, c.priority_date, now)}</section>")
 
 
+def outside_check(r, month: str) -> str:
+    """Compare the case system's own current / not current flag with the tracker's reading."""
+    said = (r.client.outside_status or "").strip().lower()
+    if said not in ("current", "not current"):
+        return ""
+    ours = {FINAL_ACTION: r.final_action == IS_CURRENT, DATES_FOR_FILING: r.dates_for_filing == IS_CURRENT}
+    agrees = (said == "current") in ours.values()
+    if agrees:
+        return ""
+    return (f"<p class='mismatch' role='note'>The case system marks this matter <b>{e(r.client.outside_status)}</b>, "
+            f"but the {month_label(month)} bulletin reads <b>{STATUS[r.final_action][0].lower()}</b> on Final Action "
+            f"and <b>{STATUS[r.dates_for_filing][0].lower()}</b> on Dates for Filing. Check the priority date, "
+            "category and chargeability.</p>")
+
+
 def client_profile(r, a: Analysis, link: bool = False) -> str:
     c = r.client
     label, tone = STATUS[r.final_action]
-    sub = " · ".join(x for x in (c.case_type, c.receipt_number) if x)
     name = f"<a href='/client/{e(c.id)}'>{e(c.name)}</a>" if link else e(c.name)
-    i485 = "Open" if r.can_file_i485 else "Not yet"
-    search = " ".join([c.name, c.category, COUNTRIES[c.chargeability], c.receipt_number]).lower()
+    facts = [("Priority date", f"<span class='mono'>{long_date(c.priority_date)}</span>"),
+             ("Preference category", f"<span class='cat'>{e(c.category)}</span>"),
+             ("Chargeability", e(COUNTRIES[c.chargeability])),
+             ("May file I-485", "Yes" if r.can_file_i485 else "Not yet")]
+    matter = [(k, v) for k, v in (("Matter", c.case_type), ("Petitioner", c.petitioner), ("Case status", c.case_status),
+                                  ("Attorney", c.attorney), ("Receipt", c.receipt_number),
+                                  ("Case system says", c.outside_status)) if v]
+    matter_html = ("<dl class='matter'>" + "".join(f"<div><dt>{k}</dt><dd>{e(v)}</dd></div>" for k, v in matter)
+                   + "</dl>") if matter else ""
+    search = " ".join([c.name, c.category, COUNTRIES[c.chargeability], c.receipt_number, c.petitioner]).lower()
     return (f"<article class='profile' data-search='{e(search)}'>"
-            f"<header><div><h3>{name}</h3>{f'<span class=sub>{e(sub)}</span>' if sub else ''}</div>"
-            f"<span class='pill {tone} lg'>{label}</span></header>"
-            f"<dl class='facts'><div><dt>Category</dt><dd><span class='cat'>{e(c.category)}</span></dd></div>"
-            f"<div><dt>Country</dt><dd>{e(COUNTRIES[c.chargeability])}</dd></div>"
-            f"<div><dt>Priority date</dt><dd class='mono'>{long_date(c.priority_date)}</dd></div>"
-            f"<div><dt>I-485 filing</dt><dd>{i485}</dd></div></dl>"
+            f"<header><h3>{name}</h3><span class='pill {tone} lg'>{label} · Final Action</span></header>"
+            f"<dl class='facts'>" + "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in facts) + "</dl>"
+            f"{matter_html}{outside_check(r, a.bulletin.month)}"
             f"<div class='pcharts'>{chart_block(r, a, FINAL_ACTION)}{chart_block(r, a, DATES_FOR_FILING)}</div>"
             f"</article>")
 
@@ -621,8 +647,8 @@ def profiles(a: Analysis, link: bool = False) -> str:
         return "<p class='empty'>No active clients yet.</p>"
     order = {WAITING: 0, IS_CURRENT: 1}
     rows = sorted(a.rows, key=lambda r: (order.get(r.final_action, 2), r.days_to_cutoff or 0, r.client.name.lower()))
-    search = ("<div class='toolbar'><input type='search' id='profile-search' placeholder='Find a client by name' "
-              "aria-label='Find a client by name'></div>")
+    search = ("<div class='toolbar'><input type='search' id='profile-search' placeholder='Find a client, petitioner "
+              "or receipt number' aria-label='Find a client'></div>")
     return search + f"<div class='profiles'>{''.join(client_profile(r, a, link) for r in rows)}</div>"
 
 
@@ -645,7 +671,7 @@ def compare_view(a: Analysis, history: list) -> str:
                                for b in bulletins)
     newer, older = bulletins[-1].month, bulletins[-2].month
     cols = "".join(f"<div class='ccol {k}' id='cmp-{k}'><h3>{label}<span class='n'>0</span></h3><div class='items'></div></div>"
-                   for k, label in (("fwd", "Moved forward"), ("back", "Moved back"), ("same", "No change")))
+                   for k, label in (("fwd", "Advanced"), ("back", "Retrogressed"), ("same", "No movement")))
     payload = json.dumps(data).replace("</", "<\\/")
     return (f"<section class='panel'><div class='head'><div><h2 id='cmp-title'></h2>"
             f"<span class='muted small'>Pick any two bulletins to compare</span></div></div><div class='body' style='padding-top:14px'>"
@@ -704,8 +730,9 @@ def dashboard(a: Analysis | None, inactive: list, row_actions=None, action_html:
         "clients": intro("<b>Every client, with how long they have left.</b> “Days left” is how far the Final Action "
                          "cutoff still has to move to pass the client's priority date. Use the buttons to filter.")
                    + client_table(a, inactive, row_actions),
-        "profiles": intro("<b>One page per client.</b> Each shows last month's cutoff next to this month's, "
-                          "what changed, and how far the client still has to go. Clients still waiting come first.")
+        "profiles": intro("<b>One profile per client.</b> Each compares the previous bulletin's cutoff with this "
+                          "month's, shows how far it moved, and how many days remain until the priority date is "
+                          "current. Clients who are not yet current come first.")
                     + profiles(a, link=row_actions is not None),
         "changes": intro("<b>How the cutoffs moved between bulletins.</b> Pick any two months to compare. "
                          "The table below shows each of your clients' categories month by month.")

@@ -78,7 +78,7 @@ class WebhookNotifier:
 
     def send(self, subject: str, markdown: str, analysis: Analysis) -> str:
         alerts = [f"- {e.client.name}: {e.detail}" for e in analysis.events if e.kind in ALERT_KINDS]
-        alerts += [f"- Moved back: {m.category} {m.country} ({m.chart.replace('_', ' ')}) "
+        alerts += [f"- Retrogressed: {m.category} {m.country} ({m.chart.replace('_', ' ')}) "
                    f"{render.cutoff_label(m.previous)} to {render.cutoff_label(m.current)}"
                    for m in analysis.retrogressions]
         text = subject + ("\n" + "\n".join(alerts) if alerts else "")

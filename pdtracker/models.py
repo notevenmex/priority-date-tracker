@@ -86,6 +86,10 @@ class Client:
     notes: str = ""
     active: bool = True
     external_id: str = ""            # id in an outside case system, for syncing
+    petitioner: str = ""             # employer or relative filing for the client
+    case_status: str = ""            # where the matter stands in the case system
+    attorney: str = ""               # who handles it (name or initials)
+    outside_status: str = ""         # the case system's own current / not current flag, to cross-check
 
     def __post_init__(self):
         self.category = normalize_category(self.category)

@@ -10,7 +10,7 @@ from .evaluate import (APPROACHING, BECAME_CURRENT, CSPA_REVIEW, IS_CURRENT, NO_
                        NOT_AVAILABLE, UNKNOWN, WAITING, Analysis)
 from .models import CHART_LABELS, DATES_FOR_FILING, FINAL_ACTION, cutoff_label
 
-STATUS_LABELS = {IS_CURRENT: "Current", WAITING: "Waiting", NOT_AVAILABLE: "Unavailable", UNKNOWN: "Not in bulletin"}
+STATUS_LABELS = {IS_CURRENT: "Current", WAITING: "Not current", NOT_AVAILABLE: "Unavailable", UNKNOWN: "Not in bulletin"}
 
 
 def _month_label(month: str) -> str:
@@ -37,7 +37,7 @@ def subject(office: str, analysis: Analysis) -> str:
         bits.append(f"{n_back} retrogressed")
     n_moved_back = len(analysis.retrogressions)
     if n_moved_back and not n_back:
-        bits.append(f"{n_moved_back} cutoff{'s' if n_moved_back != 1 else ''} moved back")
+        bits.append(f"{n_moved_back} cutoff{'s' if n_moved_back != 1 else ''} retrogressed")
     tail = ", ".join(bits) if bits else "no changes for clients"
     return f"{office}: {_month_label(analysis.bulletin.month)} Visa Bulletin, {tail}"
 
@@ -68,7 +68,7 @@ def to_markdown(office: str, a: Analysis, chart_defaults: dict | None = None,
         lines.append("")
 
     section("Newly current", a.events_of(BECAME_CURRENT))
-    section("Moved backward for these clients", a.events_of(NO_LONGER_CURRENT))
+    section("Retrogressed for these clients", a.events_of(NO_LONGER_CURRENT))
     section("Close to current", a.events_of(APPROACHING))
     section("Age-out check", a.events_of(CSPA_REVIEW))
 
@@ -103,18 +103,18 @@ def days_left_section(a: Analysis) -> list[str]:
                      key=lambda r: (r.days_to_cutoff, r.client.name.lower()))
     if not waiting:
         return []
-    lines = [f"## Days left for waiting clients ({len(waiting)})", "",
-             "How far the Final Action cutoff still has to move to pass each priority date, and how that "
-             "cutoff changed since last month.", ""]
+    lines = [f"## Days until current ({len(waiting)} not yet current)", "",
+             "How far the Final Action cutoff must advance to reach each priority date, and how that cutoff "
+             "moved since the previous bulletin.", ""]
     for r in waiting:
         c = r.client
         now = r.cutoffs[FINAL_ACTION]
         line = (f"- **{c.name} ({c.category} {COUNTRIES[c.chargeability]}):** "
-                f"{hist.days_words(r.days_to_cutoff)} to go. Final Action cutoff ")
+                f"{hist.days_words(r.days_to_cutoff)} until current. Final Action cutoff ")
         if a.previous:
             before = a.previous.cutoff(FINAL_ACTION, c.category, c.chargeability)
-            line += (f"{cutoff_label(before)} in {_month_label(a.previous.month)}, {cutoff_label(now)} in "
-                     f"{_month_label(a.bulletin.month)} ({hist.delta_words(before, now)})")
+            line += (f"{hist.delta_words(before, now)}: {cutoff_label(before)} ({_month_label(a.previous.month)}) "
+                     f"to {cutoff_label(now)} ({_month_label(a.bulletin.month)})")
         else:
             line += f"{cutoff_label(now)} in {_month_label(a.bulletin.month)}"
         lines.append(line + ".")
@@ -151,11 +151,11 @@ def changes_section(a: Analysis) -> list[str]:
     for chart in (FINAL_ACTION, DATES_FOR_FILING):
         moved = [m for m in a.movements if m.chart == chart]
         if not moved:
-            lines += [f"{CHART_LABELS[chart]}: no changes.", ""]
+            lines += [f"{CHART_LABELS[chart]}: no movement.", ""]
             continue
         back = [m for m in moved if m.direction == "backward"]
         fwd = [m for m in moved if m.direction == "forward"]
-        lines += [f"### {CHART_LABELS[chart]}: {len(back)} moved back, {len(fwd)} advanced", ""]
+        lines += [f"### {CHART_LABELS[chart]}: {len(back)} retrogressed, {len(fwd)} advanced", ""]
         lines += [_change_line(m) for m in back + fwd]
         lines.append("")
     return lines

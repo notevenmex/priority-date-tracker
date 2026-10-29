@@ -1,0 +1,10 @@
+title,client,description,updated,priority_date_status,assignees,type,status,archived
+H-1B for Test Person,Example Tech Inc.,"",07/13/26,Undefined,AB,H-1B,Case filed,False
+"DOE, Jane (I-140)",Example Tech Inc.,I-140 (EB2) with certified PERM (India),06/08/26,Not current,AB,I-140,I-140 approved / wait for priority date to become current,False
+AOS Employment for DOE Jane,Example Tech Inc.,Adjustment of Status with Approved I-140,09/01/26,Not current,CD,AOS with Approved I-140,Biometrics scheduled,False
+"DOE, John (AOS)",,AOS Derivative Spouse of Jane Doe,09/02/26,Undefined,CD,AOS with Approved I-140,Biometrics scheduled,False
+I-130 AOS for Sam Sample,,Applicant is married to a USC spouse.,05/01/26,Undefined,AB,Family Based AOS,Prepare forms and obtain client signatures,False
+"ROE, Rita (I-360)",Example Church,I-360 Religious Worker Petition,04/01/26,Current,AB,I-360 Religious Worker,Case filed,False
+"POE, Pat (AOS)",,Adjustment of status,03/01/26,Undefined,CD,AOS with Approved I-140,Approved i-485,False
+465 Labor Cert PERM,Lee Example,"",02/01/26,Undefined,AB,Unspecified,Unspecified,False
+Old matter,,"",01/01/26,Undefined,AB,I-140,Case filed,True

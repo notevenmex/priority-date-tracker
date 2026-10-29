@@ -66,6 +66,25 @@ def cmd_list(s, a):
         print(f"{c.id:10} {c.name[:28]:28} {c.category:5} {c.chargeability:11} {c.priority_date}{flag}")
 
 
+def cmd_import_docketwise(s, a):
+    from . import docketwise
+    matters = docketwise.read(a.file, s.import_columns)
+    n = docketwise.summary(matters)
+    result = docketwise.sync(_store(s), matters)
+    print(f"{n['preference']} clients wait on the Visa Bulletin. Also in the export: {n['immediate']} immediate "
+          f"relatives (nothing to track), {n['finished']} finished cases, {n['other']} other matter types.")
+    print(f"Added {result['added']}, updated {result['updated']}.")
+    left = n["preference"] - n["complete"]
+    if left:
+        missing = ", ".join(f"{v} without a {k}" for k, v in n["missing"].items() if v)
+        print(f"{left} still need information ({missing}).")
+        if a.worklist:
+            docketwise.write_worklist(matters, a.worklist)
+            print(f"Fill in {a.worklist} and load it with: pdtrack import {a.worklist}")
+        else:
+            print("Add --worklist FILE to get them as a spreadsheet to fill in.")
+
+
 def cmd_import(s, a):
     result = importers.sync(_store(s), importers.CsvFeed(a.file, s.import_columns))
     print(f"Added {result['added']}, updated {result['updated']}.")
@@ -211,6 +230,9 @@ def main(argv=None):
     ls.add_argument("--all", action="store_true", help="include inactive clients")
     im = sub.add_parser("import", help="add or update clients from a CSV (any case system's export)")
     im.add_argument("file")
+    dw = sub.add_parser("import-docketwise", help="read a Docketwise matters export (Matters tab or Matter Report)")
+    dw.add_argument("file")
+    dw.add_argument("--worklist", help="write matters still missing information to this CSV")
     ex = sub.add_parser("export", help="write all clients to a CSV")
     ex.add_argument("file")
 
@@ -248,7 +270,7 @@ def main(argv=None):
     a = p.parse_args(argv)
     handlers = {
         "add": cmd_add, "edit": cmd_edit, "remove": cmd_remove, "list": cmd_list, "import": cmd_import,
-        "export": cmd_export, "check": cmd_check, "report": cmd_report, "serve": cmd_serve,
+        "import-docketwise": cmd_import_docketwise, "export": cmd_export, "check": cmd_check, "report": cmd_report, "serve": cmd_serve,
         "provision-sharepoint": cmd_provision, "codes": cmd_codes,
     }
     bulletin_handlers = {"fetch": cmd_bulletin_fetch, "template": cmd_bulletin_template, "load": cmd_bulletin_load,
