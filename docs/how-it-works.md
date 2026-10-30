@@ -18,6 +18,14 @@ The report's "I-485 filing open" uses whichever chart USCIS accepts that month. 
 
 Category changes (for example F2B becoming F1 when the petitioner naturalizes, or an F2A child aging into F2B) are made by editing the client's category; the priority date normally carries over, and the next check uses the new category.
 
+## Every change between months
+
+Besides client alerts, each report has an "Everything that changed" section: every category and country whose cutoff moved since the previous bulletin, in both charts, backward moves first, with the number of the office's clients in each. A change in which chart USCIS accepts for filing is listed too. The email subject counts cutoffs that moved back even when no client is affected.
+
+## Getting the bulletin, and asking for it
+
+The tracker looks for a new bulletin in this order: a PDF staff dropped in the watched folder, then the PDF on travel.state.gov, then the bulletin web page. If next month's bulletin isn't on file by the reminder day, it asks staff to add it and repeats every few days until it is. A failed download is reported in that reminder rather than stopping the check.
+
 ## Alerts happen once per bulletin
 
 Each bulletin is marked processed after its check, so a daily schedule doesn't repeat alerts. `check --force` re-runs one.
@@ -34,5 +42,5 @@ The local version is the system-specific option in the sense of "runs on the off
 
 ## Known limits
 
-- The travel.state.gov parser was written against the bulletin's published layout and tested on a sample page built to match it, because this build couldn't reach the live site. Check the first automatic fetch against the real bulletin. If the layout changes, the fetch fails with a clear message and manual entry keeps working.
+- The PDF reader is tested against the real October and November 2026 bulletins (in `tests/fixtures`). The web page reader is tested only on a sample page built to match the published layout. If the State Department changes either layout, reading fails with a clear message, and staff can still type the dates in.
 - The tracker doesn't compute CSPA age, cross-chargeability, or eligibility to retain a priority date. Those stay with the attorney.

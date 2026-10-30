@@ -14,25 +14,11 @@ from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import render, tracker
+from . import dashboard, docketwise, importers, render, tracker
 from .categories import CATEGORIES, COUNTRIES
 from .evaluate import IS_CURRENT
-from .models import CHART_LABELS, CHARTS, Bulletin, Client, cutoff_label, cutoff_str, month_key
+from .models import CHART_LABELS, CHARTS, Bulletin, Client, cutoff_label, cutoff_str, month_key, parse_date
 from .stores import previous_bulletin
-
-CSS = """
-:root{--bg:#fafaf8;--fg:#1d1d1b;--muted:#6b6b66;--line:#ddddd6;--accent:#1f5f8b;--ok:#2e7d32;--warn:#a15c00}
-@media (prefers-color-scheme:dark){:root{--bg:#1b1b1a;--fg:#ececea;--muted:#a0a09a;--line:#3a3a37;--accent:#7fb3dc;--ok:#7cc47f;--warn:#e0a54d}}
-body{font:15px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0 auto;max-width:1100px;padding:16px}
-a{color:var(--accent)} h1{font-size:22px} h2{font-size:17px;margin-top:28px}
-table{border-collapse:collapse;width:100%;font-size:14px} th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
-th{color:var(--muted);font-weight:600} .ok{color:var(--ok);font-weight:600} .warn{color:var(--warn);font-weight:600}
-form.inline{display:inline} input,select,textarea{font:inherit;padding:4px 6px;background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:4px}
-button{font:inherit;padding:6px 12px;border-radius:4px;border:1px solid var(--accent);background:var(--accent);color:var(--bg);cursor:pointer}
-button.plain{background:transparent;color:var(--accent)} .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
-.grid label{display:flex;flex-direction:column;gap:2px;color:var(--muted);font-size:13px} .note{color:var(--muted);font-size:13px}
-.wrap{overflow-x:auto} td input{width:92px} .msg{padding:8px 12px;border:1px solid var(--line);border-radius:6px}
-"""
 
 STATUS_CLASS = {IS_CURRENT: "ok"}
 
@@ -47,13 +33,15 @@ class App:
         self.store = tracker.store_for(settings)
         self.token = secrets.token_urlsafe(16)
         self.lock = threading.Lock()
+        self.pending: list[docketwise.Matter] = []     # matters from the last upload still missing information
 
-    def page(self, title: str, body: str, message: str = "") -> str:
-        msg = f'<p class="msg">{_e(message)}</p>' if message else ""
-        return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' "
-                f"content='width=device-width,initial-scale=1'><title>{_e(title)}</title><style>{CSS}</style>"
-                f"</head><body><p class='note'><a href='/'>Clients</a> · <a href='/bulletin'>Enter a bulletin</a> · "
-                f"<a href='/report'>Full report</a></p><h1>{_e(title)}</h1>{msg}{body}</body></html>")
+    def page(self, title: str, body: str, message: str = "", active: str = "", kind: str = "") -> str:
+        return dashboard.shell(title, self.s.office_name, body, active, message, kind)
+
+    @staticmethod
+    def panel(heading: str, inner: str) -> str:
+        return (f"<section class='panel'><div class='head'><h2>{_e(heading)}</h2></div>"
+                f"<div class='body' style='padding-top:14px'>{inner}</div></section>")
 
     def _hidden(self) -> str:
         return f'<input type="hidden" name="token" value="{self.token}">'
@@ -71,7 +59,7 @@ class App:
             req = " required" if required else ""
             return f'<label>{label}<input type="{kind}" name="{name}" value="{_e(v.get(name) or "")}"{req}></label>'
 
-        return (f'<form method="post" action="{action}">{self._hidden()}<div class="grid">'
+        return (f'<form method="post" action="{action}">{self._hidden()}<div class="form-grid">'
                 + field("Client name", "name", required=True)
                 + f'<label>Category{self._select("category", CATEGORIES, v.get("category", "F2A"))}</label>'
                 + f'<label>Chargeability{self._select("chargeability", COUNTRIES, v.get("chargeability", "ROW"))}</label>'
@@ -80,41 +68,135 @@ class App:
                 + field("Case type", "case_type") + field("Receipt number", "receipt_number")
                 + field("Responsible attorney email", "responsible_email", "email")
                 + f'<label>Notes<textarea name="notes" rows="2">{_e(v.get("notes") or "")}</textarea></label>'
-                + "</div><p><button>Save client</button></p></form>")
+                + "</div><div><button>Save client</button></div></form>")
+
+    def client_page(self, c: Client) -> str:
+        months = self.store.bulletin_months()
+        latest = self.store.get_bulletin(months[-1]) if months else None
+        top = ""
+        if latest and c.active:
+            a = tracker.analyze(self.store, self.s, latest)
+            row = next((r for r in a.rows if r.client.id == c.id), None)
+            if row:
+                top = dashboard.client_profile(row, a)
+        back = "<p><a href='/#profiles'>← All clients</a></p>"
+        return back + top + self.panel(f"Edit {c.name}", self.client_form(c))
+
+    def import_page(self, message="", kind="") -> str:
+        upload = self.panel("Upload a Docketwise matters export", (
+            f"<form method='post' action='/import/docketwise' enctype='multipart/form-data' class='filters'>{self._hidden()}"
+            "<input type='file' name='csv' accept='.csv,text/csv' required> <button>Read the export</button></form>"
+            "<p class='muted small'>In Docketwise: Reports, Matter Reports, add the Applicant, Preference category, "
+            "Priority date and country columns, then export to CSV. A plain Matters export works too; anything it "
+            "lacks is listed for you to fill in. Only green card matters that wait on the Visa Bulletin are kept.</p>"))
+        generic = self.panel("Or upload the tracker's own spreadsheet", (
+            f"<form method='post' action='/import/csv' enctype='multipart/form-data' class='filters'>{self._hidden()}"
+            "<input type='file' name='csv' accept='.csv,text/csv' required> <button>Import</button></form>"
+            "<p class='muted small'>Columns: name, category, chargeability, priority_date, and optionally case_type, "
+            "receipt_number, petitioner, case_status, attorney, notes, external_id. The spreadsheet from "
+            "“Download as a spreadsheet” is already in this layout.</p>"))
+        return self.page("Import clients", self.worklist() + upload + generic, message, "import", kind)
+
+    def worklist(self) -> str:
+        todo = [m for m in self.pending if m.kind == docketwise.PREFERENCE and not m.complete]
+        if not todo:
+            return ""
+        import base64
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "worklist.csv"
+            docketwise.write_worklist(self.pending, path)
+            data = base64.b64encode(path.read_bytes()).decode()
+        cats = {"": "Choose…", **CATEGORIES}
+        countries = {"": "Choose…", **COUNTRIES}
+
+        def sel(name, options, chosen):
+            return (f"<select name='{name}' aria-label='{name.split('_')[0]}'>" + "".join(
+                f"<option value='{_e(k)}'{' selected' if k == chosen else ''}>{_e(k + ' · ' + v if k else v)}</option>"
+                for k, v in options.items()) + "</select>")
+
+        rows = []
+        for i, m in enumerate(self.pending):
+            if m.kind != docketwise.PREFERENCE or m.complete:
+                continue
+            pd = m.priority_date.isoformat() if m.priority_date else ""
+            ctx = " · ".join(x for x in (m.type, m.petitioner, m.status) if x)
+            hint = f"<span class='sub'>{_e('; '.join(m.notes))}</span>" if m.notes else ""
+            rows.append(f"<tr><td class='client'><b>{_e(m.applicant)}</b><span class='sub'>{_e(ctx)}</span>{hint}</td>"
+                        f"<td><input type='date' name='pd_{i}' value='{pd}' aria-label='Priority date'></td>"
+                        f"<td>{sel(f'cat_{i}', cats, m.category)}</td><td>{sel(f'ctry_{i}', countries, m.chargeability)}</td></tr>")
+        return (f"<section class='panel'><div class='head'><div><h2>Finish these clients ({len(todo)})</h2>"
+                "<span class='muted small'>The export didn't have everything the tracker needs. Fill in what you know "
+                "and save; rows left incomplete stay here. Values already filled in were read from the matter, "
+                "so check them.</span></div>"
+                f"<a class='btn ghost' download='clients-to-finish.csv' href='data:text/csv;base64,{data}'>"
+                "Download as a spreadsheet</a></div>"
+                f"<form method='post' action='/import/finish'>{self._hidden()}<div class='scroll'><table class='worklist'>"
+                "<thead><tr><th>Client and matter</th><th>Priority date</th><th>Category</th><th>Chargeability</th></tr></thead>"
+                f"<tbody>{''.join(rows)}</tbody></table></div><div class='body' style='padding:14px 16px'><button>Save the completed rows</button>"
+                "</div></form></section>")
+
+    def import_docketwise(self, form: dict) -> str:
+        import tempfile
+        from pathlib import Path
+        upload = form.get("csv")
+        if not isinstance(upload, tuple):
+            raise ValueError("Choose the CSV file first.")
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "export.csv"
+            path.write_bytes(upload[1])
+            matters = docketwise.read(path, self.s.import_columns)
+        result = docketwise.sync(self.store, matters)
+        self.pending = matters
+        n = docketwise.summary(matters)
+        left = n["preference"] - n["complete"]
+        return (f"{n['preference']} clients wait on the Visa Bulletin. Also in the export: immediate relatives "
+                f"({n['immediate']}), finished cases ({n['finished']}) and other matter types ({n['other']}). "
+                f"Added {result['added']} and updated {result['updated']} clients. "
+                + (f"{left} need a priority date, category or chargeability before they can be tracked." if left else ""))
+
+    def finish_pending(self, form: dict) -> str:
+        for i, m in enumerate(self.pending):
+            if m.kind != docketwise.PREFERENCE or m.complete:
+                continue
+            m.priority_date = parse_date(form.get(f"pd_{i}")) or m.priority_date
+            m.category = form.get(f"cat_{i}") or m.category
+            m.chargeability = form.get(f"ctry_{i}") or m.chargeability
+        docketwise.link_derivatives(self.pending)        # derivatives pick up what was entered for the principal
+        result = docketwise.sync(self.store, self.pending)
+        left = sum(1 for m in self.pending if m.kind == docketwise.PREFERENCE and not m.complete)
+        return f"Saved {result['added'] + result['updated']} clients. {left} still need information."
 
     def home(self, message="") -> str:
         months = self.store.bulletin_months()
         latest = self.store.get_bulletin(months[-1]) if months else None
-        rows = {}
-        if latest:
-            analysis = tracker.analyze(self.store, self.s, latest)
-            rows = {r.client.id: r for r in analysis.rows}
-        head = ("<tr><th>Client</th><th>Category</th><th>Priority date</th><th>Final Action</th>"
-                "<th>Dates for Filing</th><th>I-485 open</th><th></th></tr>")
-        body = []
-        for c in self.store.list_clients(include_inactive=True):
-            r = rows.get(c.id)
-            if r and c.active:
-                fa = f'<span class="{STATUS_CLASS.get(r.final_action, "")}">{_e(render.STATUS_LABELS[r.final_action])}</span>' \
-                     f'<br><span class="note">{_e(cutoff_label(r.cutoffs["final_action"]))}</span>'
-                df = f'<span class="{STATUS_CLASS.get(r.dates_for_filing, "")}">{_e(render.STATUS_LABELS[r.dates_for_filing])}</span>' \
-                     f'<br><span class="note">{_e(cutoff_label(r.cutoffs["dates_for_filing"]))}</span>'
-                i485 = '<span class="ok">Yes</span>' if r.can_file_i485 else "No"
-            else:
-                fa = df = i485 = '<span class="note">inactive</span>' if not c.active else "–"
-            toggle = "Stop tracking" if c.active else "Track again"
-            body.append(
-                f"<tr><td><a href='/client/{_e(c.id)}'>{_e(c.name)}</a><br><span class='note'>{_e(c.case_type)}</span></td>"
-                f"<td>{_e(c.category)} · {_e(COUNTRIES[c.chargeability])}</td><td>{c.priority_date:%b %d, %Y}</td>"
-                f"<td>{fa}</td><td>{df}</td><td>{i485}</td><td><form class='inline' method='post' "
-                f"action='/client/{_e(c.id)}/toggle'>{self._hidden()}<button class='plain'>{toggle}</button></form></td></tr>")
-        bulletin_note = (f"Compared against the <b>{_e(latest.month)}</b> bulletin." if latest
-                         else "No bulletin on file yet. Check for one or enter it by hand.")
-        check = (f"<form class='inline' method='post' action='/check'>{self._hidden()}"
+        analysis = tracker.analyze(self.store, self.s, latest) if latest else None
+        inactive = [c for c in self.store.list_clients(include_inactive=True) if not c.active]
+        kind = ""
+        nxt = tracker.next_month(date.today())
+        if (not message and self.s.reminder_day and date.today().day >= self.s.reminder_day
+                and nxt not in months):
+            message = (f"The {dashboard.month_label(nxt)} Visa Bulletin isn't in yet. Check for it, or download the "
+                       "PDF from travel.state.gov and upload it on Enter a bulletin.")
+            kind = "warn"
+
+        def actions(c):
+            label = "Stop tracking" if c.active else "Track again"
+            return (f"<form method='post' action='/client/{_e(c.id)}/toggle'>{self._hidden()}"
+                    f"<button class='link'>{label}</button></form>")
+
+        check = (f"<form method='post' action='/check'>{self._hidden()}"
                  "<button>Check for a new bulletin</button></form>")
-        table = f"<div class='wrap'><table>{head}{''.join(body)}</table></div>" if body else "<p>No clients yet.</p>"
-        return self.page(f"{self.s.office_name}: priority dates",
-                         f"<p>{bulletin_note} {check}</p>{table}<h2>Add a client</h2>{self.client_form()}", message)
+        history = tracker.history_upto(self.store, latest.month) if latest else []
+        body = dashboard.dashboard(analysis, inactive, actions, check, history, self.s.chart_defaults, self._hidden())
+        if not analysis:
+            names = "".join(f"<li>{_e(c.name)} · {_e(c.category)} · {c.priority_date}</li>"
+                            for c in self.store.list_clients())
+            body += self.panel("Clients", f"<ul>{names}</ul>" if names else "<p class='empty'>No clients yet.</p>")
+        body += (f"<section class='panel'><details class='add'><summary>Add a client</summary>"
+                 f"{self.client_form()}</details></section>")
+        return self.page(f"{self.s.office_name}: priority dates", body, message, "clients", kind)
 
     def bulletin_form(self, month: str | None = None, message="") -> str:
         today = date.today()
@@ -124,13 +206,19 @@ class App:
         note = ("Editing the saved bulletin." if current else
                 f"Prefilled from {base.month}; change only the cells that moved." if base else "Blank form.")
         countries = ["ROW", "CHINA", "INDIA", "MEXICO", "PHILIPPINES"]
-        parts = [f"<form method='get' action='/bulletin'><label>Month <input name='month' value='{month}' "
+        upload = self.panel("Upload the bulletin PDF", (
+            f"<form method='post' action='/bulletin/pdf' enctype='multipart/form-data' class='filters'>{self._hidden()}"
+            "<input type='file' name='pdf' accept='application/pdf' required> <button>Upload and check</button></form>"
+            "<p class='muted small'>Download it from travel.state.gov. The month is read from the PDF, and the tracker "
+            "compares it with last month and sends the usual alerts.</p>"))
+        parts = [f"<section class='panel'><div class='head'><h2>Or type the dates</h2></div><div class='body'>",
+                 f"<form method='get' action='/bulletin' class='filters' style='padding-top:12px'><label>Month <input name='month' value='{month}' "
                  f"pattern='\\d{{4}}-\\d{{2}}'></label> <button class='plain'>Open</button></form>",
-                 f"<p class='note'>{note} Enter dates as YYYY-MM-DD, or C for current, U for unavailable. "
+                 f"<p class='muted small'>{note} Enter dates as YYYY-MM-DD, or C for current, U for unavailable. "
                  "Leave blank if the bulletin has no entry.</p>",
                  f"<form method='post' action='/bulletin'>{self._hidden()}<input type='hidden' name='month' value='{month}'>"]
         for chart in CHARTS:
-            parts.append(f"<h2>{CHART_LABELS[chart]}</h2><div class='wrap'><table><tr><th></th>"
+            parts.append(f"<h3 style='margin-top:18px'>{CHART_LABELS[chart]}</h3><div class='scroll'><table><tr><th></th>"
                          + "".join(f"<th>{_e(c)}</th>" for c in countries) + "</tr>")
             for cat in CATEGORIES:
                 cells = []
@@ -147,12 +235,12 @@ class App:
             return f"<select name='{name}'>" + "".join(
                 f"<option value='{k}'{' selected' if k == chosen else ''}>{v}</option>" for k, v in opts.items()) + "</select>"
 
-        parts.append("<h2>Chart USCIS accepts for I-485 this month</h2><p class='note'>From "
-                     "uscis.gov/visabulletininfo.</p><div class='grid'>"
+        parts.append("<h3 style='margin-top:18px'>Chart USCIS accepts for I-485 this month</h3><p class='muted small'>From "
+                     "uscis.gov/visabulletininfo.</p><div class='form-grid'>"
                      f"<label>Family{sel('uscis_family_chart', fam)}</label>"
                      f"<label>Employment{sel('uscis_employment_chart', emp)}</label></div>"
-                     "<p><button>Save bulletin</button></p></form>")
-        return self.page("Enter a Visa Bulletin", "".join(parts), message)
+                     "<p><button>Save bulletin</button></p></form></div></section>")
+        return self.page("Enter a Visa Bulletin", upload + "".join(parts), message, "bulletin")
 
     def save_bulletin(self, form: dict) -> str:
         data = {"month": form["month"], "source": "manual entry",
@@ -171,8 +259,8 @@ class App:
     def report(self) -> str:
         out = tracker.current_report(self.store, self.s)
         if not out:
-            return self.page("Report", "<p>No bulletin on file yet.</p>")
-        return self.page("Report", render.to_html(out[1]))
+            return self.page("Report", self.panel("Report", "<p>No bulletin on file yet.</p>"), active="report")
+        return self.page("Report", self.panel("Monthly report", render.to_html(out[1])), active="report")
 
     def handle(self, method: str, path: str, form: dict) -> tuple[int, str, str | None]:
         """Returns (status, html, redirect)."""
@@ -189,10 +277,12 @@ class App:
                         return 200, self.bulletin_form(query.get("month"), query.get("msg", "")), None
                     if parts == ["report"]:
                         return 200, self.report(), None
+                    if parts == ["import"]:
+                        return 200, self.import_page(query.get("msg", "")), None
                     if len(parts) == 2 and parts[0] == "client":
                         c = self.store.get_client(parts[1])
                         if c:
-                            return 200, self.page(f"Edit {c.name}", self.client_form(c)), None
+                            return 200, self.page(c.name, self.client_page(c)), None
                     return 404, self.page("Not found", ""), None
                 if parts == ["client"] or (len(parts) == 2 and parts[0] == "client"):
                     d = {k: form.get(k, "") for k in ("name", "category", "chargeability", "priority_date",
@@ -209,6 +299,37 @@ class App:
                         c.active = not c.active
                         self.store.save_client(c)
                     return 303, "", "/"
+                if parts == ["bulletin", "pdf"]:
+                    from .bulletin import parse_bulletin_pdf
+                    upload = form.get("pdf")
+                    if not isinstance(upload, tuple):
+                        raise ValueError("Choose a PDF file first.")
+                    name, data = upload
+                    b = parse_bulletin_pdf(data, source=f"upload:{name}")
+                    stored = self.store.get_bulletin(b.month)
+                    if stored:
+                        b.uscis_family_chart = stored.uscis_family_chart
+                        b.uscis_employment_chart = stored.uscis_employment_chart
+                    self.store.save_bulletin(b)
+                    result = tracker.check(self.store, tracker.StoredSource(self.store), self.s,
+                                           tracker.notifiers_for(self.s), month=b.month)
+                    return 303, "", f"/?msg=Read the {b.month} bulletin from {name}. {result.summary}"
+                if parts == ["import", "docketwise"]:
+                    return 303, "", "/import?msg=" + self.import_docketwise(form)
+                if parts == ["import", "finish"]:
+                    return 303, "", "/import?msg=" + self.finish_pending(form)
+                if parts == ["import", "csv"]:
+                    import tempfile
+                    from pathlib import Path
+                    upload = form.get("csv")
+                    if not isinstance(upload, tuple):
+                        raise ValueError("Choose the CSV file first.")
+                    with tempfile.TemporaryDirectory() as d:
+                        path = Path(d) / "clients.csv"
+                        path.write_bytes(upload[1])
+                        result = importers.sync(self.store, importers.CsvFeed(path, self.s.import_columns))
+                    skipped = f" Skipped {len(result['errors'])} incomplete rows." if result["errors"] else ""
+                    return 303, "", f"/import?msg=Added {result['added']}, updated {result['updated']}.{skipped}"
                 if parts == ["bulletin"]:
                     month = self.save_bulletin(form)
                     return 303, "", f"/bulletin?month={month}&msg=Saved the {month} bulletin"
@@ -219,6 +340,23 @@ class App:
                 return 404, self.page("Not found", ""), None
             except Exception as e:      # show the problem on the page instead of a dropped connection
                 return 400, self.page("Couldn't do that", f"<p>{_e(e)}</p><p><a href='javascript:history.back()'>Go back</a></p>"), None
+
+
+def _multipart(content_type: str, body: bytes) -> dict:
+    """Text fields as strings, files as (filename, bytes)."""
+    from email.parser import BytesParser
+    from email.policy import HTTP
+
+    msg = BytesParser(policy=HTTP).parsebytes(f"Content-Type: {content_type}\r\n\r\n".encode() + body)
+    form = {}
+    for part in msg.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        filename = part.get_filename()
+        data = part.get_payload(decode=True) or b""
+        form[name] = (filename, data) if filename is not None else data.decode("utf-8", "replace")
+    return form
 
 
 def make_handler(app: App, port: int):
@@ -232,7 +370,15 @@ def make_handler(app: App, port: int):
             form = {}
             if method == "POST":
                 length = int(self.headers.get("Content-Length") or 0)
-                form = {k: v[0] for k, v in parse_qs(self.rfile.read(length).decode(), keep_blank_values=True).items()}
+                if length > 20_000_000:
+                    self.send_error(413)
+                    return
+                body = self.rfile.read(length)
+                ctype = self.headers.get("Content-Type", "")
+                if ctype.startswith("multipart/form-data"):
+                    form = _multipart(ctype, body)
+                else:
+                    form = {k: v[0] for k, v in parse_qs(body.decode(), keep_blank_values=True).items()}
             status, body, redirect = app.handle(method, self.path, form)
             if redirect:
                 from urllib.parse import quote

@@ -14,7 +14,8 @@ from typing import Iterable, Protocol
 from .models import Client
 
 FIELDS = ["name", "category", "chargeability", "priority_date", "case_type", "receipt_number",
-          "beneficiary_dob", "responsible_email", "notes", "active", "external_id"]
+          "beneficiary_dob", "responsible_email", "notes", "active", "external_id",
+          "petitioner", "case_status", "attorney", "outside_status"]
 
 
 class ClientFeed(Protocol):

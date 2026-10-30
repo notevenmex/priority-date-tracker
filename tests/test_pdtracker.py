@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from pathlib import Path
 
@@ -78,18 +79,22 @@ def test_parse_garbage_is_a_clear_error():
         bulletin.parse_bulletin_html("<html><p>moved</p></html>", "2026-12")
 
 
-def test_index_links_and_url_pattern():
+def test_index_links_and_url_patterns():
     found = bulletin.months_on_index(SAMPLE, "https://travel.state.gov/x/visa-bulletin.html")
     assert found == {"2026-12": "https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin/2027/"
                                 "visa-bulletin-for-december-2026.html"}
     src = bulletin.StateDeptSource(session=object())
     assert src.url_for("2026-10").endswith("/2027/visa-bulletin-for-october-2026.html")
     assert src.url_for("2027-03").endswith("/2027/visa-bulletin-for-march-2027.html")
+    assert src.pdf_url_for("2026-11") == ("https://travel.state.gov/content/dam/visas/Bulletins/"
+                                          "visabulletin_November2026.pdf")
 
 
 class FakeResp:
-    def __init__(self, text, status=200):
-        self.text, self.status_code = text, status
+    def __init__(self, body, status=200):
+        self.content = body if isinstance(body, bytes) else body.encode()
+        self.text = body if isinstance(body, str) else ""
+        self.status_code = status
 
 
 class FakeSession:
@@ -101,12 +106,57 @@ class FakeSession:
         return FakeResp(self.pages[url]) if url in self.pages else FakeResp("", 404)
 
 
-def test_state_dept_source_latest():
-    url = ("https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin/2027/"
-           "visa-bulletin-for-december-2026.html")
-    session = FakeSession({bulletin.DEFAULT_INDEX_URL: SAMPLE, url: SAMPLE})
-    b = bulletin.StateDeptSource(session=session).latest()
-    assert b.month == "2026-12" and b.source == url
+DEC_PDF_URL = "https://travel.state.gov/content/dam/visas/Bulletins/visabulletin_December2026.pdf"
+DEC_HTML_URL = ("https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin/2027/"
+                "visa-bulletin-for-december-2026.html")
+SAMPLE_PDF = (FIXTURES / "bulletin_sample.pdf").read_bytes()
+
+
+def test_pdf_parses_the_same_as_the_web_page():
+    pdf = bulletin.parse_bulletin_pdf(SAMPLE_PDF)
+    html = bulletin.parse_bulletin_html(SAMPLE, "2026-12")
+    assert pdf.month == "2026-12"                      # read from the title
+    assert pdf.to_dict()["final_action"] == html.to_dict()["final_action"]
+    assert pdf.to_dict()["dates_for_filing"] == html.to_dict()["dates_for_filing"]
+    assert len(pdf.final_action) == 15
+
+
+def test_text_with_rows_on_one_line():
+    text = ("VISA BULLETIN FOR JANUARY 2027\nA. FINAL ACTION DATES FOR FAMILY-SPONSORED PREFERENCE CASES\n"
+            "Family- Sponsored All Chargeability Areas Except Those Listed CHINA- mainland born INDIA MEXICO PHILIPPINES\n"
+            "F1 08NOV16 08NOV16 08NOV16 22APR05 01MAR13\nF2A 01FEB24 01FEB24 01FEB24 01FEB23 01FEB24\n"
+            "A. FINAL ACTION DATES FOR EMPLOYMENT-BASED PREFERENCE CASES\n"
+            "Employment- based All Chargeability Areas Except Those Listed CHINA- mainland born INDIA MEXICO PHILIPPINES\n"
+            "1st C 15FEB23 15APR22 C C\n5th Set Aside:\nRural (20%, including NR, RR) C C C C C\n")
+    b = bulletin.parse_bulletin_text(text)
+    assert b.month == "2027-01"
+    assert b.cutoff(FINAL_ACTION, "F2A", "MEXICO") == date(2023, 2, 1)
+    assert b.cutoff(FINAL_ACTION, "EB1", "INDIA") == date(2022, 4, 15)
+    assert b.cutoff(FINAL_ACTION, "EB5R", "ROW") == CURRENT
+
+
+def test_not_a_pdf_is_a_clear_error():
+    with pytest.raises(bulletin.BulletinError, match="isn't a PDF"):
+        bulletin.parse_bulletin_pdf(b"<html>not found</html>")
+
+
+def test_state_dept_source_prefers_pdf_then_web_page():
+    session = FakeSession({DEC_PDF_URL: SAMPLE_PDF, DEC_HTML_URL: SAMPLE})
+    b = bulletin.StateDeptSource(session=session).latest(today=date(2026, 11, 18))
+    assert b.month == "2026-12" and b.source == DEC_PDF_URL
+
+    session = FakeSession({DEC_HTML_URL: SAMPLE})        # no PDF yet
+    b = bulletin.StateDeptSource(session=session).fetch("2026-12")
+    assert b.source == DEC_HTML_URL
+
+    session = FakeSession({DEC_HTML_URL: SAMPLE})
+    assert bulletin.StateDeptSource(fmt="pdf", session=session).fetch("2026-12") is None
+
+
+def test_latest_falls_back_to_this_month():
+    session = FakeSession({DEC_PDF_URL: SAMPLE_PDF})
+    b = bulletin.StateDeptSource(session=session).latest(today=date(2026, 12, 3))   # January not out yet
+    assert b.month == "2026-12"
 
 
 # evaluation
@@ -170,18 +220,20 @@ def test_check_alerts_once_per_bulletin(settings):
     store.save_client(client())
     store.save_bulletin(bull("2026-11", {"F2A": {"MEXICO": "01JAN22"}}))
     store.mark_processed("2026-11")
-    session = FakeSession({bulletin.DEFAULT_INDEX_URL: SAMPLE,
-                           "https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin/2027/"
-                           "visa-bulletin-for-december-2026.html": SAMPLE})
-    source = bulletin.StateDeptSource(session=session)
+    session = FakeSession({DEC_PDF_URL: SAMPLE_PDF})
+
+    class Src(bulletin.StateDeptSource):
+        def latest(self):
+            return super().latest(today=date(2026, 11, 18))
+    source = Src(session=session)
     note = ListNotifier()
 
-    first = tracker.check(store, source, settings, [note])
+    first = tracker.check(store, source, settings, [note], today=date(2026, 11, 18))
     assert first.new and "1 newly current" in first.subject
     assert "Garcia, Maria" in note.sent[0][1]
     assert store.statuses  # written back
 
-    again = tracker.check(store, source, settings, [note])
+    again = tracker.check(store, source, settings, [note], today=date(2026, 11, 18))
     assert not again.new and len(note.sent) == 1
 
 
@@ -305,3 +357,281 @@ def test_sharepoint_store_dates_and_statuses():
     store.mark_processed("2026-12")
     assert store.is_processed("2026-12")
     assert g.lists["Priority Dates"][c.id]["StatusMonth"] == "2026-12"
+
+
+# month-to-month changes
+
+def test_report_lists_every_change_even_without_clients(settings):
+    nov = bull("2026-11", {"EB2": {"INDIA": "01JAN13"}, "F3": {"ROW": "01JAN11"}, "F1": {"ROW": "01JAN16"}},
+               uscis_family_chart=DATES_FOR_FILING)
+    dec = bull("2026-12", {"EB2": {"INDIA": "01JAN12"}, "F3": {"ROW": "01MAR11"}, "F1": {"ROW": "01JAN16"}},
+               uscis_family_chart=FINAL_ACTION)
+    a = evaluate.analyze([client()], dec, nov)          # the one client is F2A Mexico, unaffected
+    md = render.to_markdown("X", a)
+    assert "## Everything that changed since November 2026" in md
+    assert "**EB2 India:** retrogressed 1 year, from Jan 01, 2013 to Jan 01, 2012" in md
+    assert "**F3 All other countries:** advanced 2 months, from Jan 01, 2011 to Mar 01, 2011" in md
+    assert "F1 All other countries" not in md.split("Everything that changed")[1]   # unchanged cells left out
+    assert "changed from Dates for Filing to Final Action Dates" in md
+    assert "2 cutoffs retrogressed" in render.subject("X", a)      # EB2 India in both charts
+    assert "<h4>" in render.to_html(md)
+
+
+def test_report_says_when_nothing_changed():
+    b = {"F1": {"ROW": "01JAN16"}}
+    md = render.to_markdown("X", evaluate.analyze([], bull("2026-12", b), bull("2026-11", b)))
+    assert "No cutoffs changed since November 2026." in md
+
+
+# reminders
+
+class RemindNotifier(ListNotifier):
+    def __init__(self):
+        super().__init__()
+        self.reminders = []
+
+    def remind(self, subject, md):
+        self.reminders.append((subject, md))
+        return "reminded"
+
+
+class NothingSource:
+    def latest(self):
+        return None
+
+
+class BrokenSource:
+    def latest(self):
+        raise bulletin.BulletinError("travel.state.gov returned HTTP 503")
+
+
+def test_reminder_when_next_bulletin_is_missing(settings):
+    store = MemoryStore()
+    note = RemindNotifier()
+    for day in (19, 20, 21, 22, 23):
+        tracker.check(store, NothingSource(), settings, [note], today=date(2026, 11, day))
+    assert len(note.reminders) == 2                     # day 20, then every 3 days
+    subject, md = note.reminders[0]
+    assert "December 2026 Visa Bulletin" in subject
+    assert "visabulletin_December2026.pdf" in md and "Enter a bulletin" in md
+
+    store.save_bulletin(bull("2026-12", {"F1": {"ROW": "C"}}))
+    tracker.check(store, NothingSource(), settings, [note], today=date(2026, 11, 26))
+    assert len(note.reminders) == 2                     # bulletin on file now
+
+
+def test_failed_download_is_reported_not_raised(settings):
+    note = RemindNotifier()
+    result = tracker.check(MemoryStore(), BrokenSource(), settings, [note], today=date(2026, 11, 20))
+    assert "HTTP 503" in result.summary and "HTTP 503" in note.reminders[0][1]
+    assert tracker.check(MemoryStore(), BrokenSource(), settings, [note],
+                         today=date(2026, 11, 5)).delivered == []
+
+
+def test_reminders_off(settings):
+    settings.reminder_day = 0
+    note = RemindNotifier()
+    tracker.check(MemoryStore(), NothingSource(), settings, [note], today=date(2026, 11, 20))
+    assert note.reminders == []
+
+
+# drop-folder inbox
+
+def test_pdf_dropped_in_folder_is_picked_up_once(tmp_path, settings):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    store = MemoryStore()
+    store.save_client(client())
+    source = bulletin.InboxSource(store, bulletin.FolderInbox(inbox), NothingSource())
+    note = RemindNotifier()
+    assert not tracker.check(store, source, settings, [note], today=date(2026, 11, 10)).new
+
+    (inbox / "visabulletin_December2026.pdf").write_bytes(SAMPLE_PDF)
+    first = tracker.check(store, source, settings, [note], today=date(2026, 11, 20))
+    assert first.new and first.month == "2026-12" and note.reminders == []
+    assert store.get_bulletin("2026-12").source == "folder:visabulletin_December2026.pdf"
+
+    (inbox / "copy.pdf").write_bytes(SAMPLE_PDF)       # same bulletin saved twice
+    assert not tracker.check(store, source, settings, [note], today=date(2026, 11, 21)).new
+
+
+def test_load_pdf_file(tmp_path):
+    p = tmp_path / "dec.pdf"
+    p.write_bytes(SAMPLE_PDF)
+    b = bulletin.load_bulletin_file(p)
+    assert b.month == "2026-12" and b.source == "file:dec.pdf"
+
+
+# Real bulletins from travel.state.gov (public documents)
+
+REAL_OCT = (FIXTURES / "visabulletin_October2026.pdf").read_bytes()
+REAL_NOV = (FIXTURES / "visabulletin_November2026.pdf").read_bytes()
+
+
+def test_real_november_2026_bulletin():
+    b = bulletin.parse_bulletin_pdf(REAL_NOV)
+    assert b.month == "2026-11"
+    assert len(b.final_action) == 15 and len(b.dates_for_filing) == 15
+    assert b.cutoff(FINAL_ACTION, "F1", "MEXICO") == date(2008, 9, 22)
+    assert b.cutoff(FINAL_ACTION, "F2A", "MEXICO") == date(2026, 4, 22)
+    assert b.cutoff(DATES_FOR_FILING, "F2A", "ROW") == CURRENT
+    assert b.cutoff(DATES_FOR_FILING, "F4", "MEXICO") == date(2001, 4, 30)
+    assert b.cutoff(FINAL_ACTION, "EW", "PHILIPPINES") == date(2022, 1, 1)
+    assert b.cutoff(FINAL_ACTION, "SR", "INDIA") == date(2022, 12, 15)     # label split over three lines
+    assert b.cutoff(DATES_FOR_FILING, "EB5U", "CHINA") == date(2021, 3, 1)   # table split across pages
+    assert b.cutoff(DATES_FOR_FILING, "EB5I", "ROW") == CURRENT
+
+
+def test_real_october_to_november_changes():
+    oct_, nov = bulletin.parse_bulletin_pdf(REAL_OCT), bulletin.parse_bulletin_pdf(REAL_NOV)
+    assert oct_.month == "2026-10"
+    a = evaluate.analyze([], nov, oct_)
+    moved = {(m.chart, m.category, m.country): m.direction for m in a.movements}
+    assert moved[(FINAL_ACTION, "F1", "ROW")] == "forward"           # 22JAN20 -> 22JAN21
+    assert moved[(FINAL_ACTION, "EB2", "ROW")] == "forward"          # 01JAN25 -> 01APR25
+    assert (FINAL_ACTION, "EB4", "ROW") not in moved                 # unchanged
+    assert not a.retrogressions
+
+
+# days left and bulletin history
+
+from pdtracker import dashboard, history  # noqa: E402
+
+
+def test_series_skips_months_that_dont_list_the_cell():
+    hist_ = [bull("2026-08", {"F3": {"MEXICO": "01JAN01"}}), bull("2026-09", {"F4": {"ROW": "01JAN08"}}),
+             bull("2026-10", {"F3": {"MEXICO": "01APR01"}})]
+    assert [m for m, _ in history.series(hist_, FINAL_ACTION, "F3", "MEXICO")] == ["2026-08", "2026-10"]
+
+
+def test_delta_words():
+    assert history.delta_words(date(2020, 1, 22), date(2021, 1, 22)) == "advanced 1 year"
+    assert history.delta_words(date(2008, 9, 8), date(2008, 9, 22)) == "advanced 14 days"
+    assert history.delta_words(date(2013, 8, 1), date(2013, 7, 15)) == "retrogressed 17 days"
+    assert history.delta_words(date(2019, 8, 22), date(2021, 1, 5)) == "advanced 1 year, 4 months, 14 days"
+    assert history.delta_words(date(2013, 8, 1), CURRENT).startswith("became current")
+    assert history.delta_words(CURRENT, CURRENT) == "no movement"
+    assert history.delta_words(CURRENT, date(2020, 1, 1)).startswith("retrogressed")
+
+
+def test_compare_any_two_bulletins():
+    a = bull("2026-07", {"F1": {"ROW": "01JAN15"}})
+    c = bull("2026-10", {"F1": {"ROW": "01JAN14"}})
+    changes = [x for x in history.compare(a, c, ["ROW"]) if x.chart == FINAL_ACTION]
+    assert [(x.category, x.direction) for x in changes] == [("F1", "backward")]
+
+
+def test_report_and_dashboard_show_days_left_and_history():
+    oct_, nov = bulletin.parse_bulletin_pdf(REAL_OCT), bulletin.parse_bulletin_pdf(REAL_NOV)
+    c = client(id="h", name="Hernandez, Jose", category="F3", priority_date="2001-11-20")
+    a = evaluate.analyze([c], nov, oct_)
+    md = render.to_markdown("X", a, history=[oct_, nov])
+    assert "## Time until current (1 not yet current)" in md
+    assert ("4 months, 5 days until current. Final Action cutoff advanced 14 days: Jul 01, 2001 (October 2026) "
+            "to Jul 15, 2001 (November 2026)") in md
+    assert "estimate" not in md.lower() and "pace" not in md.lower()
+    assert "Final Action cutoffs over the last 2 bulletins" in md
+    page = dashboard.dashboard(a, [], history=[oct_, nov])
+    for view in ("overview", "clients", "profiles", "changes", "chart"):
+        assert f"data-view='{view}'" in page
+    assert "4 months, 5 days" in page and "id='bulletin-data'" in page
+    assert "Estimate" not in page and "pace" not in page.lower()
+    # the client's profile puts last month's cutoff next to this month's, with the change in words
+    profile = page[page.index("<article class='profile'"):]
+    assert "October 2026 bulletin" in profile and "01JUL01" in profile
+    assert "November 2026 bulletin" in profile and "15JUL01" in profile
+    assert "Advanced 14 days" in profile and "until current" in profile
+
+
+# Docketwise matters export
+
+from pdtracker import docketwise, stores  # noqa: E402
+
+DW_MATTERS = FIXTURES / "docketwise_matters_sample.csv"
+DW_REPORT = FIXTURES / "docketwise_report_sample.csv"
+
+
+def test_docketwise_matters_export_sorts_and_infers():
+    ms = {m.applicant: m for m in docketwise.read(DW_MATTERS)}
+    assert ms["Test Person"].kind == docketwise.OTHER                 # H-1B is not a green card matter
+    jane = ms["DOE, Jane"]
+    assert jane.kind == docketwise.PREFERENCE and (jane.category, jane.chargeability) == ("EB2", "INDIA")
+    assert jane.status == "Biometrics scheduled" and "I-140 + AOS" in jane.type      # I-140 and AOS combined
+    assert jane.missing == ["priority date"] and jane.outside_status == "Not current"
+    john = ms["DOE, John"]
+    assert (john.category, john.chargeability) == ("EB2", "INDIA") and "derivative of DOE, Jane" in john.notes[-1]
+    assert ms["Sam Sample"].kind == docketwise.IMMEDIATE
+    assert ms["ROE, Rita"].category == "SR" and ms["ROE, Rita"].chargeability == ""     # never guess a country
+    assert ms["POE, Pat"].kind == docketwise.DONE
+    assert "Lee Example" in ms and ms["Lee Example"].petitioner == ""                    # name from the contact
+    assert "Old matter" not in ms                                                         # archived
+
+
+def test_docketwise_worklist_round_trip(tmp_path):
+    matters = docketwise.read(DW_MATTERS)
+    store = stores.MemoryStore()
+    assert docketwise.sync(store, matters) == {"added": 0, "updated": 0}
+    path = tmp_path / "todo.csv"
+    assert docketwise.write_worklist(matters, path) == 4
+    text = path.read_text().replace("DOE, Jane\",,EB2", "DOE, Jane\",2015-03-01,EB2")
+    path.write_text(text)
+    result = importers.sync(store, importers.CsvFeed(path))
+    assert result["added"] == 1 and len(result["errors"]) == 3
+    jane = store.list_clients()[0]
+    assert jane.petitioner == "Example Tech Inc." and jane.attorney == "CD" and jane.outside_status == "Not current"
+
+
+def test_docketwise_matter_report_with_dates(tmp_path):
+    matters = docketwise.read(DW_REPORT)
+    assert all(m.complete for m in matters)
+    store = stores.MemoryStore()
+    assert docketwise.sync(store, matters)["added"] == 2
+    assert docketwise.sync(store, matters) == {"added": 0, "updated": 2}                # re-import updates
+    ana = next(c for c in store.list_clients() if c.name == "Smith, Ana")
+    assert (ana.category, ana.chargeability, str(ana.priority_date)) == ("EB3", "PHILIPPINES", "2023-03-15")
+
+
+def test_profile_flags_case_system_disagreement():
+    oct_, nov = bulletin.parse_bulletin_pdf(REAL_OCT), bulletin.parse_bulletin_pdf(REAL_NOV)
+    c = client(id="m", name="Mismatch, Mo", category="F3", priority_date="2005-01-01", outside_status="Current",
+               petitioner="Mismatch, Mia", case_status="NVC processing")
+    a = evaluate.analyze([c], nov, oct_)
+    html_ = dashboard.client_profile(a.rows[0], a)
+    assert "class='mismatch'" in html_ and "Petitioner" in html_ and "NVC processing" in html_
+    c.outside_status = "Not current"
+    assert "class='mismatch'" not in dashboard.client_profile(evaluate.analyze([c], nov, oct_).rows[0], a)
+
+
+def test_docketwise_full_report_format():
+    assert docketwise.split_category("EB 2nd: India") == ("EB2", "INDIA")
+    assert docketwise.split_category("EB Certain Religious Workers: All Areas") == ("SR", "ROW")
+    assert docketwise.split_category("1. Emp: Religious Workers") == ("SR", "")
+    assert docketwise.split_category("EB Other Workers: Philippines") == ("EW", "PHILIPPINES")
+    assert docketwise.split_category("1. Immediate Relative") == ("IR", "")
+    ms = {m.applicant: m for m in docketwise.read(FIXTURES / "docketwise_full_report_sample.csv")}
+    jane = ms["Jane DOE"]                    # archived I-140 holds the dates; the open AOS keeps her tracked
+    assert jane.complete and str(jane.priority_date) == "2024-03-15" and jane.status == "Biometrics scheduled"
+    assert jane.receipt_number == "IOE0900000003" and jane.outside_status == "Not current"
+    assert str(ms["Rita ROE"].priority_date) == "2007-06-21" and ms["Rita ROE"].category == "SR"
+    assert ms["Pat POE"].complete and ms["Pat POE"].chargeability == "PHILIPPINES"
+    assert ms["Sam SAMPLE"].kind == docketwise.IMMEDIATE
+    assert "Old CLIENT" not in ms                                     # every matter archived
+
+
+def test_gap_words_reads_like_a_calendar():
+    from pdtracker.models import gap_words
+    assert gap_words(date(2001, 7, 15), date(2001, 11, 20)) == "4 months, 5 days"
+    assert gap_words(date(2020, 1, 1), date(2021, 5, 15)) == "1 year, 4 months, 14 days"
+    assert gap_words(date(2024, 1, 31), date(2024, 3, 1)) == "1 month, 1 day"
+    assert gap_words(date(2024, 1, 1), date(2024, 1, 10)) == "9 days"
+
+
+def test_quick_lookup_is_on_the_dashboard():
+    oct_, nov = bulletin.parse_bulletin_pdf(REAL_OCT), bulletin.parse_bulletin_pdf(REAL_NOV)
+    a = evaluate.analyze([client(id="h", category="F3", priority_date="2001-11-20")], nov, oct_)
+    page = dashboard.dashboard(a, [], history=[oct_, nov], save_html="<input type='hidden' name='token' value='t'>")
+    assert "data-view='lookup'" in page and "id='lk-pd'" in page and "id='lk-save'" in page
+    data = json.loads(page.split("id='bulletin-data'>")[1].split("</script>")[0])
+    assert data["latest"] == "2026-11" and data["previous"] == "2026-10"
+    assert data["uscis"] == {"family": "dates_for_filing", "employment": "final_action"}
+    assert "id='lk-save'" not in dashboard.dashboard(a, [], history=[oct_, nov])     # read-only page: no save

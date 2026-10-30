@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from .bulletin import DEFAULT_INDEX_URL, DEFAULT_PAGE_URL
+from .bulletin import DEFAULT_INDEX_URL, DEFAULT_PAGE_URL, DEFAULT_PDF_URL, FORMATS
 from .models import CHARTS, DATES_FOR_FILING, FINAL_ACTION
 
 
@@ -31,10 +31,16 @@ class Settings:
     sp_site_path: str = ""
     clients_list: str = "Priority Dates"
     bulletins_list: str = "Visa Bulletins"
+    bulletin_folder: str = ""        # SharePoint folder (in the site's Documents) where staff drop bulletin PDFs
     # Bulletin
     bulletin_source: str = "state_dept"
     index_url: str = DEFAULT_INDEX_URL
     page_url: str = DEFAULT_PAGE_URL
+    pdf_url: str = DEFAULT_PDF_URL
+    bulletin_format: str = "auto"    # pdf, html, or auto (PDF first, then the web page)
+    inbox_dir: str = ""              # local folder where staff drop bulletin PDFs
+    reminder_day: int = 20           # ask staff for the bulletin from this day of the month; 0 turns it off
+    reminder_every_days: int = 3
     chart_defaults: dict = field(default_factory=lambda: {"family": DATES_FOR_FILING, "employment": FINAL_ACTION})
     # Alerts
     approaching_days: int = 180
@@ -96,12 +102,20 @@ def parse(raw: dict, base_dir: Path = Path(".")) -> Settings:
     s.sp_site_path = m365.get("site_path", "") or ""
     s.clients_list = m365.get("clients_list", s.clients_list)
     s.bulletins_list = m365.get("bulletins_list", s.bulletins_list)
+    s.bulletin_folder = m365.get("bulletin_folder", "") or ""
 
     s.bulletin_source = bulletin.get("source", "state_dept")
     if s.bulletin_source not in ("state_dept", "manual"):
         raise ConfigError("bulletin.source must be 'state_dept' or 'manual'.")
     s.index_url = bulletin.get("index_url", s.index_url)
     s.page_url = bulletin.get("page_url", s.page_url)
+    s.pdf_url = bulletin.get("pdf_url", s.pdf_url)
+    s.bulletin_format = bulletin.get("format", s.bulletin_format)
+    if s.bulletin_format not in FORMATS:
+        raise ConfigError(f"bulletin.format must be one of {FORMATS}.")
+    s.inbox_dir = bulletin.get("inbox_dir", "") or ""
+    s.reminder_day = int(bulletin.get("reminder_day", s.reminder_day))
+    s.reminder_every_days = max(1, int(bulletin.get("reminder_every_days", s.reminder_every_days)))
     chart = bulletin.get("uscis_chart_default") or {}
     for key in ("family", "employment"):
         if key in chart:

@@ -28,7 +28,7 @@ export PDTRACKER_CLIENT_SECRET='...'
 pdtrack -c config/myoffice.yaml provision-sharepoint
 ```
 
-This creates **Priority Dates** (one row per client) and **Visa Bulletins** (one row per month, used by the tracker). Re-running it is safe. Staff fill in Title (client name), Category, Chargeability and PriorityDate; the other columns are optional. The tracker fills in FinalActionStatus, FilingStatus and StatusMonth, so the list doubles as the dashboard. Add a view grouped by FinalActionStatus if that helps.
+This creates **Priority Dates** (one row per client) and **Visa Bulletins** (one row per month, used by the tracker). Also create the folder named in `microsoft365.bulletin_folder` (default `Visa Bulletin PDFs`) in the site's Documents library: staff can drop a bulletin PDF there and the next daily check picks it up. Re-running it is safe. Staff fill in Title (client name), Category, Chargeability and PriorityDate; the other columns are optional. The tracker fills in FinalActionStatus, FilingStatus and StatusMonth, so the list doubles as the dashboard. Add a view grouped by FinalActionStatus if that helps.
 
 Existing clients can be loaded once from a CSV with `pdtrack -c config/myoffice.yaml import clients.csv`.
 
@@ -52,7 +52,7 @@ cd cloud/azure-function
 func azure functionapp publish <unique-app-name> --python
 ```
 
-`PDTRACKER_SCHEDULE` is a six-field cron in UTC; the example runs daily at 14:00 UTC. The bulletin usually comes out mid-month, and the tracker only alerts once per bulletin.
+`PDTRACKER_SCHEDULE` is a six-field cron in UTC; the example runs daily at 14:00 UTC. The bulletin usually comes out mid-month, and the tracker only alerts once per bulletin. Each run first looks in the SharePoint drop folder, then at travel.state.gov. If next month's bulletin isn't in by `bulletin.reminder_day`, the run emails the office asking someone to drop the PDF in the folder.
 
 ## 4. Endpoints
 
@@ -62,7 +62,7 @@ All need the function key (`?code=...` or the `x-functions-key` header). Get it 
 |---|---|
 | `POST /api/check` | run the check now. Body (optional): `{"force": true}` or `{"month": "2026-12"}` |
 | `GET /api/status` | every active client's status against the newest bulletin, as JSON |
-| `POST /api/bulletin` | save a bulletin entered by hand (the JSON from `pdtrack bulletin template`), including the USCIS chart choice |
+| `POST /api/bulletin` | add a bulletin: the PDF itself (`Content-Type: application/pdf`, checked right away) or the JSON from `pdtrack bulletin template`, which can also record the USCIS chart choice |
 
 A Power Automate flow or a Teams button can call these.
 

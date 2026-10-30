@@ -55,6 +55,30 @@ def cutoff_str(cutoff) -> str:
     return cutoff.isoformat() if isinstance(cutoff, date) else str(cutoff)
 
 
+def gap_words(earlier: date, later: date) -> str:
+    """Calendar distance between two dates: '1 year, 4 months, 14 days', '6 months, 2 days', '9 days'.
+
+    Counted the way a person reads a calendar: whole months from the earlier date (a day that
+    doesn't exist in a shorter month falls on its last day), then the days left over.
+    """
+    import calendar
+    if later < earlier:
+        earlier, later = later, earlier
+
+    def plus(months: int) -> date:
+        total = earlier.year * 12 + earlier.month - 1 + months
+        y, m = divmod(total, 12)
+        return date(y, m + 1, min(earlier.day, calendar.monthrange(y, m + 1)[1]))
+
+    months = (later.year - earlier.year) * 12 + later.month - earlier.month
+    while months > 0 and plus(months) > later:
+        months -= 1
+    days = (later - plus(months)).days
+    years, months = divmod(months, 12)
+    parts = [f"{n} {unit}{'s' if n != 1 else ''}" for n, unit in ((years, "year"), (months, "month"), (days, "day")) if n]
+    return ", ".join(parts) or "0 days"
+
+
 def cutoff_label(cutoff) -> str:
     if cutoff == CURRENT:
         return "Current"
@@ -86,6 +110,10 @@ class Client:
     notes: str = ""
     active: bool = True
     external_id: str = ""            # id in an outside case system, for syncing
+    petitioner: str = ""             # employer or relative filing for the client
+    case_status: str = ""            # where the matter stands in the case system
+    attorney: str = ""               # who handles it (name or initials)
+    outside_status: str = ""         # the case system's own current / not current flag, to cross-check
 
     def __post_init__(self):
         self.category = normalize_category(self.category)

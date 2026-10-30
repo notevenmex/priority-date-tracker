@@ -8,3 +8,5 @@ config/*.yaml
 cloud/azure-function/pdtracker/
 cloud/azure-function/local.settings.json
 .venv/
+bulletin-inbox/
+pdtracker-demo/
