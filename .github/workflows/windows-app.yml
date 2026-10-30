@@ -1,0 +1,80 @@
+# Builds the Windows app (installer and no-install zip) on every pull request and push to main.
+# On main it also publishes them to the GitHub release for the version in pyproject.toml, so the
+# newest download is always at releases/latest.
+name: Windows app
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install ".[m365,dev]" pyinstaller
+
+      - name: Test
+        run: pytest -q
+
+      - name: Build the app folder
+        run: pyinstaller --noconfirm packaging/windows/pdtracker.spec
+
+      - name: Check the built app opens the dashboard
+        shell: pwsh
+        env:
+          PDTRACKER_HOME: ${{ runner.temp }}\pdt-home
+          PDTRACKER_OFFICE_NAME: Smoke Test Office
+          PDTRACKER_PORT: "8799"
+        run: |
+          $p = Start-Process dist\PriorityDateTracker\PriorityDateTracker.exe -PassThru
+          $ok = $false
+          foreach ($i in 1..30) {
+            Start-Sleep -Seconds 2
+            try { $r = Invoke-WebRequest http://localhost:8799/ -UseBasicParsing; $ok = $r.Content -match "Smoke Test Office"; break } catch {}
+          }
+          Stop-Process -Id $p.Id -Force
+          if (-not $ok) { throw "The dashboard did not open." }
+          dist\PriorityDateTracker\PriorityDateTracker.exe codes
+          if ($LASTEXITCODE -ne 0) { throw "pdtrack commands don't run." }
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" packaging\windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
+          Compress-Archive -Path dist\PriorityDateTracker -DestinationPath dist\PriorityDateTracker-NoInstall.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PriorityDateTracker-windows
+          path: |
+            dist/PriorityDateTracker-Setup.exe
+            dist/PriorityDateTracker-NoInstall.zip
+
+      - name: Publish the release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:APP_VERSION"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --target $env:GITHUB_SHA --title "Priority Date Tracker $env:APP_VERSION" --notes "Download PriorityDateTracker-Setup.exe and follow docs/windows-app.md."
+          }
+          gh release upload $tag dist\PriorityDateTracker-Setup.exe dist\PriorityDateTracker-NoInstall.zip --clobber

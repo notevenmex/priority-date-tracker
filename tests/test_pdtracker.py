@@ -635,3 +635,30 @@ def test_quick_lookup_is_on_the_dashboard():
     assert data["latest"] == "2026-11" and data["previous"] == "2026-10"
     assert data["uscis"] == {"family": "dates_for_filing", "employment": "final_action"}
     assert "id='lk-save'" not in dashboard.dashboard(a, [], history=[oct_, nov])     # read-only page: no save
+
+
+# desktop app launcher
+
+def test_app_first_run_writes_a_working_config(tmp_path, monkeypatch):
+    from pdtracker import app
+    monkeypatch.delenv("PDTRACKER_OFFICE_NAME", raising=False)
+    answers = iter(["", "O'Brien & Díaz: Immigration"])
+    path = app.ensure_config(tmp_path / "office", ask=lambda prompt: next(answers))
+    s = config.load(path)
+    assert s.office_name == "O'Brien & Díaz: Immigration"
+    assert s.resolve(s.sqlite_path) == tmp_path / "office" / "data" / "priority-dates.db"
+    assert (tmp_path / "office" / "bulletin-inbox").is_dir()
+    assert app.ensure_config(tmp_path / "office", ask=lambda prompt: pytest.fail("asked twice")) == path
+
+
+def test_app_runs_commands_against_the_office_folder(tmp_path, monkeypatch, capsys):
+    from pdtracker import app
+    monkeypatch.setenv("PDTRACKER_HOME", str(tmp_path))
+    assert app.main(["list"]) == 1
+    assert "Open the app once first" in capsys.readouterr().err
+    monkeypatch.setenv("PDTRACKER_OFFICE_NAME", "Test Office")
+    app.ensure_config(app.home_dir())
+    assert app.main(["add", "--name", "Reyes, Ana", "--category", "F4", "--country", "Philippines",
+                     "--pd", "2005-01-01"]) == 0
+    assert app.main(["list"]) == 0
+    assert "Reyes, Ana" in capsys.readouterr().out

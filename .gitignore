@@ -10,3 +10,5 @@ cloud/azure-function/local.settings.json
 .venv/
 bulletin-inbox/
 pdtracker-demo/
+build/
+dist/
