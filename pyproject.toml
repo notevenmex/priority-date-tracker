@@ -3,7 +3,7 @@ name = "pdtracker"
 version = "0.1.0"
 description = "Priority date and Visa Bulletin tracker for immigration law offices"
 requires-python = ">=3.10"
-dependencies = ["requests>=2.31", "PyYAML>=6.0", "pypdf>=4.0"]
+dependencies = ["requests>=2.31", "PyYAML>=6.0", "pypdf>=4.0", "tzdata; sys_platform == 'win32'"]  # Windows has no time zone database of its own
 
 [project.optional-dependencies]
 m365 = ["msal>=1.28"]
