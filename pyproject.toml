@@ -11,6 +11,7 @@ dev = ["pytest>=8", "msal>=1.28", "reportlab>=4.0"]
 
 [project.scripts]
 pdtrack = "pdtracker.cli:main"
+pdtrack-app = "pdtracker.app:main"
 
 [build-system]
 requires = ["setuptools>=68"]

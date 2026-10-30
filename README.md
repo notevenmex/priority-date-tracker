@@ -4,6 +4,10 @@ Tracks each client's place in the green card line against the monthly Visa Bulle
 
 Everything office-specific lives in one YAML config file per office. Nothing is hardcoded to a person, tenant or folder.
 
+## Easiest: the Windows app
+
+Office staff don't need Python or the command line. [Download the installer](https://github.com/notevenmex/priority-date-tracker/releases/latest/download/PriorityDateTracker-Setup.exe), double-click it, and follow the plain-language guide in [docs/windows-app.md](docs/windows-app.md). It is the local version below, packaged with everything it needs: a desktop icon opens the dashboard, and the first run asks only for the office's name.
+
 ## Two ways to run it
 
 | | Local version | Cloud version |
