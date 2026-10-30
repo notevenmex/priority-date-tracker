@@ -8,7 +8,7 @@ import sys
 
 from . import config, importers, tracker
 from .bulletin import BulletinError, load_bulletin_file
-from .categories import CATEGORIES, COUNTRIES
+from .categories import CATEGORIES, COUNTRIES, country_name
 from .graph import GraphError
 from .models import CHARTS, Bulletin, Client, month_key
 from .stores import previous_bulletin
@@ -23,8 +23,10 @@ def cmd_add(s, a):
                     case_type=a.case_type or "", receipt_number=a.receipt or "", beneficiary_dob=a.dob,
                     responsible_email=a.email or "", notes=a.notes or "")
     client = _store(s).save_client(client)
-    print(f"Added {client.name} ({client.category}, {COUNTRIES[client.chargeability]}, PD {client.priority_date}) "
-          f"as {client.id}")
+    print(f"Added {client.name} ({client.category or 'no category'}, {country_name(client.chargeability)}, "
+          f"PD {client.priority_date or 'not entered'}) as {client.id}")
+    if client.missing:
+        print(f"Still needed before it can be checked: {', '.join(client.missing)}")
 
 
 def cmd_edit(s, a):
@@ -63,7 +65,8 @@ def cmd_remove(s, a):
 def cmd_list(s, a):
     for c in _store(s).list_clients(include_inactive=a.all):
         flag = "" if c.active else "  (inactive)"
-        print(f"{c.id:10} {c.name[:28]:28} {c.category:5} {c.chargeability:11} {c.priority_date}{flag}")
+        print(f"{c.id:10} {c.name[:28]:28} {c.category or '-':5} {c.chargeability or '-':11} "
+              f"{c.priority_date or 'no PD'}{flag}")
 
 
 def cmd_import_docketwise(s, a):
@@ -200,11 +203,11 @@ def cmd_codes(s, a):
         print(f"  {k:12} {v}")
 
 
-def _client_args(p, required: bool):
-    p.add_argument("--name", required=required)
-    p.add_argument("--category", required=required, help="F1, F2A, F2B, F3, F4, EB1, EB2, EB3, EW, EB4, EB5U ...")
-    p.add_argument("--country", required=required, help="chargeability country, e.g. Mexico; others count as ROW")
-    p.add_argument("--pd", required=required, help="priority date, YYYY-MM-DD")
+def _client_args(p):
+    p.add_argument("--name")
+    p.add_argument("--category", help="F1, F2A, F2B, F3, F4, EB1, EB2, EB3, EW, EB4, EB5U ...")
+    p.add_argument("--country", help="chargeability country, e.g. Mexico; others count as ROW")
+    p.add_argument("--pd", help="priority date, YYYY-MM-DD")
     p.add_argument("--dob", help="beneficiary date of birth, for age-out reminders")
     p.add_argument("--case-type")
     p.add_argument("--receipt", help="receipt number")
@@ -217,10 +220,10 @@ def main(argv=None):
     p.add_argument("--config", "-c", help="path to this office's YAML config (not needed for 'demo')")
     sub = p.add_subparsers(dest="command", required=True)
 
-    _client_args(sub.add_parser("add", help="add a client"), required=True)
+    _client_args(sub.add_parser("add", help="add a client (every field is optional; fill in the rest later)"))
     e = sub.add_parser("edit", help="change a client's details")
     e.add_argument("id")
-    _client_args(e, required=False)
+    _client_args(e)
     e.add_argument("--inactive", action="store_true", help="stop tracking (case closed)")
     e.add_argument("--active", action="store_true", help="track again")
     r = sub.add_parser("remove", help="stop tracking a client")

@@ -24,6 +24,9 @@ UninstallDisplayIcon={app}\PriorityDateTracker.exe
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; Updating: running a newer installer replaces the program files in place (same AppId), closing a
+; running copy first. The office folder in Documents is never touched, so clients and settings stay.
+CloseApplications=force
 
 [Tasks]
 Name: "desktopicon"; Description: "Put a Priority Date Tracker icon on the desktop"; GroupDescription: "Shortcuts:"

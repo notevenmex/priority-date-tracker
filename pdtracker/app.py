@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-from . import cli, config
+from . import __version__, cli, config, updates
 
 FOLDER_NAME = "Priority Date Tracker"
 CONFIG_NAME = "office.yaml"
@@ -93,7 +93,7 @@ def _open_or_serve(s, p: int, what: str) -> int:
         return 0
     from .webui import serve
     print()
-    print(f"  {what} is running.")
+    print(f"  {what} (version {__version__}) is running.")
     print(f"  Your web browser will open it. If it doesn't, go to {url}")
     print()
     print("  Leave this window open while you use it. Close this window when you're done.")
@@ -106,6 +106,7 @@ def run_dashboard() -> int:
     _title("Priority Date Tracker - leave this window open")
     home = home_dir()
     s = config.load(ensure_config(home))
+    updates.start(__version__)
     return _open_or_serve(s, port(), "The Priority Date Tracker")
 
 

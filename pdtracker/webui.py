@@ -14,7 +14,7 @@ from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import dashboard, docketwise, importers, render, tracker
+from . import __version__, dashboard, docketwise, importers, render, tracker, updates
 from .categories import CATEGORIES, COUNTRIES
 from .evaluate import IS_CURRENT
 from .models import CHART_LABELS, CHARTS, Bulletin, Client, cutoff_label, cutoff_str, month_key, parse_date
@@ -47,7 +47,8 @@ class App:
         return f'<input type="hidden" name="token" value="{self.token}">'
 
     def _select(self, name, options: dict, selected="") -> str:
-        opts = "".join(f'<option value="{_e(k)}"{" selected" if k == selected else ""}>{_e(k)} · {_e(v)}</option>'
+        blank = f'<option value=""{" selected" if not selected else ""}>Not sure yet</option>'
+        opts = blank + "".join(f'<option value="{_e(k)}"{" selected" if k == selected else ""}>{_e(k)} · {_e(v)}</option>'
                        for k, v in options.items())
         return f'<select name="{name}">{opts}</select>'
 
@@ -59,11 +60,15 @@ class App:
             req = " required" if required else ""
             return f'<label>{label}<input type="{kind}" name="{name}" value="{_e(v.get(name) or "")}"{req}></label>'
 
-        return (f'<form method="post" action="{action}">{self._hidden()}<div class="form-grid">'
-                + field("Client name", "name", required=True)
-                + f'<label>Category{self._select("category", CATEGORIES, v.get("category", "F2A"))}</label>'
-                + f'<label>Chargeability{self._select("chargeability", COUNTRIES, v.get("chargeability", "ROW"))}</label>'
-                + field("Priority date", "priority_date", "date", True)
+        # Every field is optional: a client missing a priority date, category or chargeability is saved
+        # and listed as needing details until someone fills them in.
+        return (f'<form method="post" action="{action}">{self._hidden()}'
+                "<p class='muted small'>Fill in what you know. You can save with blanks and finish later.</p>"
+                '<div class="form-grid">'
+                + field("Client name", "name")
+                + f'<label>Category{self._select("category", CATEGORIES, v.get("category", ""))}</label>'
+                + f'<label>Chargeability{self._select("chargeability", COUNTRIES, v.get("chargeability", ""))}</label>'
+                + field("Priority date", "priority_date", "date")
                 + field("Beneficiary date of birth (optional)", "beneficiary_dob", "date")
                 + field("Case type", "case_type") + field("Receipt number", "receipt_number")
                 + field("Responsible attorney email", "responsible_email", "email")
@@ -191,9 +196,16 @@ class App:
         history = tracker.history_upto(self.store, latest.month) if latest else []
         body = dashboard.dashboard(analysis, inactive, actions, check, history, self.s.chart_defaults, self._hidden())
         if not analysis:
-            names = "".join(f"<li>{_e(c.name)} · {_e(c.category)} · {c.priority_date}</li>"
+            names = "".join(f"<li>{_e(c.name)} · {_e(c.category or 'no category')} · "
+                            f"{c.priority_date or 'no priority date'}</li>"
                             for c in self.store.list_clients())
             body += self.panel("Clients", f"<ul>{names}</ul>" if names else "<p class='empty'>No clients yet.</p>")
+        new = updates.available()
+        if new:
+            body = (f"<div class='notice' role='status'>Version {_e(new['version'])} of the Priority Date Tracker is "
+                    f"out (this computer has {_e(__version__)}). <a href='{_e(new['url'])}'>Download the update</a>, "
+                    "open it and click through, like the first install. Your clients and settings stay as they are."
+                    "</div>") + body
         body += (f"<section class='panel'><details class='add'><summary>Add a client</summary>"
                  f"{self.client_form()}</details></section>")
         return self.page(f"{self.s.office_name}: priority dates", body, message, "clients", kind)
@@ -292,7 +304,8 @@ class App:
                         old = self.store.get_client(parts[1])
                         d.update(id=parts[1], active=old.active if old else True, external_id=old.external_id if old else "")
                     c = self.store.save_client(Client.from_dict(d))
-                    return 303, "", f"/?msg=Saved {c.name}"
+                    todo = f" Still needed: {', '.join(c.missing)}." if c.missing else ""
+                    return 303, "", f"/?msg=Saved {c.name}.{todo}"
                 if len(parts) == 3 and parts[0] == "client" and parts[2] == "toggle":
                     c = self.store.get_client(parts[1])
                     if c:

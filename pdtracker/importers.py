@@ -45,6 +45,10 @@ def sync(store, feed: ClientFeed) -> dict:
     for n, row in enumerate(feed.rows(), start=2):
         try:
             client = Client.from_dict(row)
+            # Hand entry may leave blanks, but an import row must be complete, so a stray or half-filled
+            # line in a spreadsheet doesn't become a client.
+            if not row.get("name") or client.missing:
+                raise ValueError("missing " + ", ".join((["name"] if not row.get("name") else []) + client.missing))
         except (ValueError, TypeError, KeyError) as e:
             errors.append(f"row {n}: {e}")
             continue

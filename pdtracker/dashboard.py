@@ -10,9 +10,9 @@ import calendar
 import html
 from datetime import date
 
-from .categories import CATEGORIES, COUNTRIES, is_family
+from .categories import CATEGORIES, COUNTRIES, country_name, is_family
 from .evaluate import (APPROACHING, BECAME_CURRENT, CSPA_REVIEW, IS_CURRENT, NO_LONGER_CURRENT, NOT_AVAILABLE,
-                       UNKNOWN, WAITING, Analysis, _rank, uscis_chart)
+                       NEEDS_INFO, UNKNOWN, WAITING, Analysis, _rank, uscis_chart)
 from .evaluate import status as evaluate_status
 import json
 
@@ -338,6 +338,7 @@ STATUS = {
     WAITING: ("Not current", "warn"),
     NOT_AVAILABLE: ("Unavailable", "bad"),
     UNKNOWN: ("Not listed", ""),
+    NEEDS_INFO: ("Needs details", "info"),
 }
 EVENT = {
     BECAME_CURRENT: ("Newly current", "ok"),
@@ -370,7 +371,11 @@ def bulletin_code(cutoff) -> str:
 
 
 def long_date(d) -> str:
-    return f"{d:%b} {d.day}, {d.year}"
+    return f"{d:%b} {d.day}, {d.year}" if d else "Not entered"
+
+
+def cat_label(category: str) -> str:
+    return category or "–"
 
 
 def span(days: int) -> str:
@@ -467,7 +472,7 @@ def attention(a: Analysis) -> str:
             label, cls = EVENT[ev.kind]
             c = ev.client
             lis.append(f"<li><span class='pill {cls}'>{label}</span><div><b>{e(c.name)}</b> "
-                       f"<span class='muted small'><span class='cat'>{e(c.category)}</span> · {e(COUNTRIES[c.chargeability])}"
+                       f"<span class='muted small'><span class='cat'>{e(cat_label(c.category))}</span> · {e(country_name(c.chargeability))}"
                        f" · PD <span class='mono nowrap'>{long_date(c.priority_date)}</span></span><br>"
                        f"<span class='small'>{e(ev.detail)}</span></div></li>")
         items = f"<ul class='events'>{''.join(lis)}</ul>"
@@ -485,28 +490,30 @@ def client_table(a: Analysis, inactive: list, row_actions=None) -> str:
     for r in sorted(a.rows, key=lambda r: ({IS_CURRENT: 0, WAITING: 1}.get(r.final_action, 2),
                                            r.days_to_cutoff or 0, r.client.name.lower())):
         c = r.client
-        filters = [r.final_action, "family" if is_family(c.category) else "employment"]
+        filters = [r.final_action] + ([("family" if is_family(c.category) else "employment")] if c.category else [])
         if r.can_file_i485:
             filters.append("i485")
         filters += events_by_client.get(c.id, [])
         fa_cut, df_cut = r.cutoffs[FINAL_ACTION], r.cutoffs[DATES_FOR_FILING]
         chart = "Filing chart" if r.uscis_chart == DATES_FOR_FILING else "Final Action chart"
         i485 = ("<span class='pill ok'>Open</span>" if r.can_file_i485 else "<span class='pill'>Not yet</span>")
-        if r.final_action == IS_CURRENT:
+        if r.final_action == NEEDS_INFO:
+            days_cell = f"<span class='sub'>Add the {e(c.missing_text)} to check this client</span>"
+        elif r.final_action == IS_CURRENT:
             days_cell = "<span class='big ok'>Current</span><span class='sub'>no wait under Final Action</span>"
         elif r.days_to_cutoff is not None:
             days_cell = (f"<span class='big'>{hist.gap_words(r.cutoffs[FINAL_ACTION], c.priority_date)}</span>"
                          f"<span class='sub'>until the Final Action cutoff passes</span>")
         else:
             days_cell = "<span class='muted small'>–</span>"
-        search = " ".join([c.name, c.category, COUNTRIES[c.chargeability], c.receipt_number, c.case_type]).lower()
+        search = " ".join([c.name, c.category, country_name(c.chargeability), c.receipt_number, c.case_type]).lower()
         sub = " · ".join(x for x in (c.case_type, c.receipt_number) if x)
         name = (f"<a href='/client/{e(c.id)}'>{e(c.name)}</a>" if row_actions else f"<b>{e(c.name)}</b>")
         actions = f"<td>{row_actions(c)}</td>" if row_actions else ""
         rows.append(
             f"<tr data-status='{r.final_action}' data-filters='{' '.join(filters)}' data-search='{e(search)}'>"
             f"<td class='client'>{name}<span class='sub'>{e(sub)}</span></td>"
-            f"<td><span class='cat'>{e(c.category)}</span><span class='sub'>{e(COUNTRIES[c.chargeability])}</span></td>"
+            f"<td><span class='cat'>{e(cat_label(c.category))}</span><span class='sub'>{e(country_name(c.chargeability))}</span></td>"
             f"<td class='mono nowrap'>{long_date(c.priority_date)}</td>"
             f"<td class='days'>{days_cell}</td>"
             f"<td>{_pill(r.final_action)}<span class='sub mono'>cutoff {bulletin_code(fa_cut)}</span></td>"
@@ -517,10 +524,12 @@ def client_table(a: Analysis, inactive: list, row_actions=None) -> str:
         actions = f"<td>{row_actions(c)}</td>" if row_actions else ""
         rows.append(f"<tr class='inactive' data-status='inactive' data-filters='inactive' data-search='{e(c.name.lower())}'>"
                     f"<td class='client'>{name}<span class='sub'>Not tracked (case closed)</span></td>"
-                    f"<td><span class='cat'>{e(c.category)}</span><span class='sub'>{e(COUNTRIES[c.chargeability])}</span></td>"
+                    f"<td><span class='cat'>{e(cat_label(c.category))}</span><span class='sub'>{e(country_name(c.chargeability))}</span></td>"
                     f"<td class='mono'>{long_date(c.priority_date)}</td><td colspan='4' class='muted small'>–</td>{actions}</tr>")
     chips = [("all", "All"), (IS_CURRENT, "Current"), (WAITING, "Not current"), ("i485", "Can file I-485"),
              ("family", "Family"), ("employment", "Employment")]
+    if any(r.final_action == NEEDS_INFO for r in a.rows):
+        chips.append((NEEDS_INFO, "Needs details"))
     if inactive:
         chips.append(("inactive", "Not tracked"))
     chip_html = "".join(f"<button type='button' class='chip' data-filter='{k}' aria-pressed='{str(k == 'all').lower()}'>{v}</button>"
@@ -538,6 +547,8 @@ def bulletin_grid(a: Analysis) -> str:
     b, prev = a.bulletin, a.previous
     clients_in = {}
     for r in a.rows:
+        if r.final_action == NEEDS_INFO:
+            continue
         key = (r.client.category, r.client.chargeability)
         clients_in[key] = clients_in.get(key, 0) + 1
     tables = []
@@ -663,7 +674,7 @@ def chart_block(r, a: Analysis, chart: str) -> str:
 def outside_check(r, month: str) -> str:
     """Compare the case system's own current / not current flag with the tracker's reading."""
     said = (r.client.outside_status or "").strip().lower()
-    if said not in ("current", "not current"):
+    if said not in ("current", "not current") or r.final_action == NEEDS_INFO:
         return ""
     ours = {FINAL_ACTION: r.final_action == IS_CURRENT, DATES_FOR_FILING: r.dates_for_filing == IS_CURRENT}
     agrees = (said == "current") in ours.values()
@@ -680,20 +691,25 @@ def client_profile(r, a: Analysis, link: bool = False) -> str:
     label, tone = STATUS[r.final_action]
     name = f"<a href='/client/{e(c.id)}'>{e(c.name)}</a>" if link else e(c.name)
     facts = [("Priority date", f"<span class='mono'>{long_date(c.priority_date)}</span>"),
-             ("Preference category", f"<span class='cat'>{e(c.category)}</span>"),
-             ("Chargeability", e(COUNTRIES[c.chargeability])),
+             ("Preference category", f"<span class='cat'>{e(cat_label(c.category))}</span>"),
+             ("Chargeability", e(country_name(c.chargeability))),
              ("May file I-485", "Yes" if r.can_file_i485 else "Not yet")]
     matter = [(k, v) for k, v in (("Matter", c.case_type), ("Petitioner", c.petitioner), ("Case status", c.case_status),
                                   ("Attorney", c.attorney), ("Receipt", c.receipt_number),
                                   ("Case system says", c.outside_status)) if v]
     matter_html = ("<dl class='matter'>" + "".join(f"<div><dt>{k}</dt><dd>{e(v)}</dd></div>" for k, v in matter)
                    + "</dl>") if matter else ""
-    search = " ".join([c.name, c.category, COUNTRIES[c.chargeability], c.receipt_number, c.petitioner]).lower()
+    search = " ".join([c.name, c.category, country_name(c.chargeability), c.receipt_number, c.petitioner]).lower()
+    if r.final_action == NEEDS_INFO:
+        edit = f" <a href='/client/{e(c.id)}'>Fill them in</a>" if link else ""
+        charts = (f"<p class='standing'><b>Needs details</b> <span>add the {e(c.missing_text)} to see where "
+                  f"this client stands in the bulletin.{edit}</span></p>")
+    else:
+        charts = f"<div class='pcharts'>{chart_block(r, a, FINAL_ACTION)}{chart_block(r, a, DATES_FOR_FILING)}</div>"
     return (f"<article class='profile' data-search='{e(search)}'>"
             f"<header><h3>{name}</h3><span class='pill {tone} lg'>{label} · Final Action</span></header>"
             f"<dl class='facts'>" + "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in facts) + "</dl>"
-            f"{matter_html}{outside_check(r, a.bulletin.month)}"
-            f"<div class='pcharts'>{chart_block(r, a, FINAL_ACTION)}{chart_block(r, a, DATES_FOR_FILING)}</div>"
+            f"{matter_html}{outside_check(r, a.bulletin.month)}{charts}"
             f"</article>")
 
 
@@ -712,6 +728,8 @@ def bulletin_data(a: Analysis, history: list, chart_defaults: dict | None = None
     bulletins = sorted(history, key=lambda b: b.month)
     clients = {}
     for r in a.rows:
+        if r.final_action == NEEDS_INFO:
+            continue
         key = f"{r.client.category}|{r.client.chargeability}"
         clients[key] = clients.get(key, 0) + 1
     defaults = chart_defaults or {}
@@ -751,7 +769,7 @@ def compare_view(a: Analysis, history: list) -> str:
 
 def history_table(a: Analysis, history: list) -> str:
     bulletins = sorted(history, key=lambda b: b.month)[-hist.HISTORY_WINDOW - 1:]
-    cells = sorted({(r.client.category, r.client.chargeability) for r in a.rows},
+    cells = sorted({(r.client.category, r.client.chargeability) for r in a.rows if r.final_action != NEEDS_INFO},
                    key=lambda k: (list(CATEGORIES).index(k[0]), GRID_COUNTRIES.index(k[1]) if k[1] in GRID_COUNTRIES else 9))
     if len(bulletins) < 2 or not cells:
         return ""
@@ -785,7 +803,7 @@ def lookup_view(a: Analysis, save_html: str = "") -> str:
     if save_html:
         save = (f"<form method='post' action='/client' id='lk-save' class='lk-save' hidden>{save_html}"
                 "<input type='hidden' name='priority_date'><input type='hidden' name='category'>"
-                "<input type='hidden' name='chargeability'><label>Client name<input name='name' required></label>"
+                "<input type='hidden' name='chargeability'><label>Client name<input name='name'></label>"
                 "<button>Save as a client</button></form>")
     return (f"<section class='panel'><div class='body lookup-form'>"
             "<label>Priority date<input type='date' id='lk-pd'></label>"

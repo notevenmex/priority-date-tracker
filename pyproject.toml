@@ -1,6 +1,6 @@
 [project]
 name = "pdtracker"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Priority date and Visa Bulletin tracker for immigration law offices"
 requires-python = ">=3.10"
 dependencies = ["requests>=2.31", "PyYAML>=6.0", "pypdf>=4.0", "tzdata; sys_platform == 'win32'"]  # Windows has no time zone database of its own
@@ -16,6 +16,9 @@ pdtrack-app = "pdtracker.app:main"
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "pdtracker.__version__"}
 
 [tool.setuptools]
 packages = ["pdtracker", "pdtracker.demo"]

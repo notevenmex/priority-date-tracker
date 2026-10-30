@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import html
 
-from .categories import CATEGORIES, COUNTRIES
+from .categories import CATEGORIES, COUNTRIES, country_name
 from . import history as hist
 from .evaluate import (APPROACHING, BECAME_CURRENT, CSPA_REVIEW, IS_CURRENT, NO_LONGER_CURRENT,
-                       NOT_AVAILABLE, UNKNOWN, WAITING, Analysis)
+                       NEEDS_INFO, NOT_AVAILABLE, UNKNOWN, WAITING, Analysis)
 from .models import CHART_LABELS, DATES_FOR_FILING, FINAL_ACTION, cutoff_label
 
-STATUS_LABELS = {IS_CURRENT: "Current", WAITING: "Not current", NOT_AVAILABLE: "Unavailable", UNKNOWN: "Not in bulletin"}
+STATUS_LABELS = {IS_CURRENT: "Current", WAITING: "Not current", NOT_AVAILABLE: "Unavailable", UNKNOWN: "Not in bulletin",
+                 NEEDS_INFO: "needs details"}
 
 
 def _month_label(month: str) -> str:
@@ -20,8 +21,8 @@ def _month_label(month: str) -> str:
 
 
 def _who(client) -> str:
-    bits = [client.name, f"{client.category} {COUNTRIES[client.chargeability]}",
-            f"PD {client.priority_date:%b %d, %Y}"]
+    bits = [client.name, f"{client.category or 'no category'} {country_name(client.chargeability)}",
+            f"PD {client.priority_date:%b %d, %Y}" if client.priority_date else "no priority date"]
     if client.receipt_number:
         bits.append(client.receipt_number)
     return " · ".join(bits)
@@ -82,6 +83,9 @@ def to_markdown(office: str, a: Analysis, chart_defaults: dict | None = None,
 
     lines += [f"## All active clients ({len(a.rows)})", ""]
     for r in sorted(a.rows, key=lambda r: (r.final_action != IS_CURRENT, r.client.name.lower())):
+        if r.final_action == NEEDS_INFO:
+            lines.append(f"- **{_who(r.client)}:** needs details: add the {r.client.missing_text}")
+            continue
         i485 = "yes" if r.can_file_i485 else "no"
         lines.append(f"- **{_who(r.client)}:** Final Action {STATUS_LABELS[r.final_action]} "
                      f"({cutoff_label(r.cutoffs['final_action'])}), Dates for Filing "
@@ -109,7 +113,7 @@ def days_left_section(a: Analysis) -> list[str]:
     for r in waiting:
         c = r.client
         now = r.cutoffs[FINAL_ACTION]
-        line = (f"- **{c.name} ({c.category} {COUNTRIES[c.chargeability]}):** "
+        line = (f"- **{c.name} ({c.category} {country_name(c.chargeability)}):** "
                 f"{hist.gap_words(now, c.priority_date)} until current. Final Action cutoff ")
         if a.previous:
             before = a.previous.cutoff(FINAL_ACTION, c.category, c.chargeability)
@@ -123,7 +127,7 @@ def days_left_section(a: Analysis) -> list[str]:
 
 
 def history_section(a: Analysis, history: list) -> list[str]:
-    cells = sorted({(r.client.category, r.client.chargeability) for r in a.rows},
+    cells = sorted({(r.client.category, r.client.chargeability) for r in a.rows if r.final_action != NEEDS_INFO},
                    key=lambda k: (list(CATEGORIES).index(k[0]), k[1]))
     upto = [b for b in history if b.month <= a.bulletin.month][-hist.HISTORY_WINDOW - 1:]
     if len(upto) < 2 or not cells:

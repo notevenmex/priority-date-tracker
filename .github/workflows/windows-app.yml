@@ -1,6 +1,6 @@
 # Builds the Windows app (installer and no-install zip) on every pull request and push to main.
-# On main it also publishes them to the GitHub release for the version in pyproject.toml, so the
-# newest download is always at releases/latest.
+# On main it also publishes them to the GitHub release for pdtracker.__version__, so the newest
+# download is always at releases/latest. Raise __version__ to make installed copies offer the update.
 name: Windows app
 
 on:
@@ -52,7 +52,7 @@ jobs:
       - name: Build the installer
         shell: pwsh
         run: |
-          $version = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          $version = (Select-String -Path pdtracker/__init__.py -Pattern '^__version__ = "(.+)"').Matches[0].Groups[1].Value
           "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
           choco install innosetup -y --no-progress
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" packaging\windows\installer.iss

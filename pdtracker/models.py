@@ -96,12 +96,17 @@ def month_key(value: str) -> str:
     return f"{int(m[1]):04d}-{int(m[2]):02d}"
 
 
+UNNAMED = "Unnamed client"
+
+
 @dataclass
 class Client:
-    name: str
-    category: str
-    chargeability: str
-    priority_date: date
+    """Only what staff know needs filling in. A client without a priority date, category or
+    chargeability is kept on file and listed as needing details, but can't be compared to a bulletin."""
+    name: str = ""
+    category: str = ""
+    chargeability: str = ""
+    priority_date: date | None = None
     id: str = ""
     case_type: str = ""
     receipt_number: str = ""
@@ -116,18 +121,28 @@ class Client:
     outside_status: str = ""         # the case system's own current / not current flag, to cross-check
 
     def __post_init__(self):
-        self.category = normalize_category(self.category)
-        self.chargeability = chargeability_column(self.chargeability)
+        self.name = (self.name or "").strip() or UNNAMED
+        self.category = normalize_category(self.category) if (self.category or "").strip() else ""
+        # A blank country stays blank: chargeability is a legal call, never defaulted to "all other countries".
+        self.chargeability = chargeability_column(self.chargeability) if (self.chargeability or "").strip() else ""
         self.priority_date = parse_date(self.priority_date)
         self.beneficiary_dob = parse_date(self.beneficiary_dob)
-        if not self.name.strip():
-            raise ValueError("Client name is required.")
-        if self.priority_date is None:
-            raise ValueError("Priority date is required.")
+
+    @property
+    def missing(self) -> list[str]:
+        """What still has to be entered before the client can be checked against a bulletin."""
+        return [label for label, value in (("priority date", self.priority_date), ("category", self.category),
+                                           ("chargeability", self.chargeability)) if not value]
+
+    @property
+    def missing_text(self) -> str:
+        """'priority date', 'priority date and category', 'priority date, category and chargeability'."""
+        m = self.missing
+        return " and ".join(m) if len(m) < 3 else f"{', '.join(m[:-1])} and {m[-1]}"
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        d["priority_date"] = self.priority_date.isoformat()
+        d["priority_date"] = self.priority_date.isoformat() if self.priority_date else None
         d["beneficiary_dob"] = self.beneficiary_dob.isoformat() if self.beneficiary_dob else None
         return d
 
