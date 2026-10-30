@@ -13,6 +13,7 @@ IS_CURRENT = "current"
 WAITING = "waiting"
 NOT_AVAILABLE = "unavailable"
 UNKNOWN = "unknown"
+NEEDS_INFO = "needs_info"        # the client is missing a priority date, category or chargeability
 
 # Event kinds, in the order the report shows them
 BECAME_CURRENT = "became_current"
@@ -105,6 +106,10 @@ class Analysis:
 
 
 def client_status(client: Client, bulletin: Bulletin, chart_defaults: dict) -> ClientStatus:
+    if client.missing:
+        return ClientStatus(client=client, final_action=NEEDS_INFO, dates_for_filing=NEEDS_INFO,
+                            cutoffs={chart: None for chart in CHARTS},
+                            uscis_chart=uscis_chart(bulletin, client.category, chart_defaults), days_to_cutoff=None)
     cutoffs = {chart: bulletin.cutoff(chart, client.category, client.chargeability) for chart in CHARTS}
     fa = status(client.priority_date, cutoffs[FINAL_ACTION])
     gap = None

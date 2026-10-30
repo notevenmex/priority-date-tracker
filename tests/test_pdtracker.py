@@ -346,8 +346,11 @@ def test_sharepoint_store_dates_and_statuses():
     g.lists["Priority Dates"][c.id]["PriorityDate"] = "2015-02-28T16:00:00Z"
     assert store.get_client(c.id).priority_date == date(2015, 3, 1)
     g.lists["Priority Dates"]["99"] = {"Title": "Half filled", "Category": "F2A"}
-    assert [x.name for x in store.list_clients()] == ["Garcia, Maria"]
-    assert store.invalid_rows() == ["Half filled"]
+    g.lists["Priority Dates"]["98"] = {"Title": "Typo", "Category": "F9"}
+    listed = {x.name: x for x in store.list_clients()}
+    assert sorted(listed) == ["Garcia, Maria", "Half filled"]
+    assert listed["Half filled"].missing == ["priority date", "chargeability"]
+    assert store.invalid_rows() == ["Typo"]
 
     b = bulletin.parse_bulletin_html(SAMPLE, "2026-12")
     store.save_bulletin(b)
@@ -662,3 +665,95 @@ def test_app_runs_commands_against_the_office_folder(tmp_path, monkeypatch, caps
                      "--pd", "2005-01-01"]) == 0
     assert app.main(["list"]) == 0
     assert "Reyes, Ana" in capsys.readouterr().out
+
+
+# clients entered by hand with blanks
+
+def test_client_with_blanks_is_kept_but_not_checked(tmp_path):
+    blank = Client()
+    assert blank.name == "Unnamed client" and blank.chargeability == ""     # never defaulted to ROW
+    assert blank.missing == ["priority date", "category", "chargeability"]
+    store = SqliteStore(tmp_path / "db.sqlite")
+    no_pd = store.save_client(Client(name="Reyes, Ana", category="F4", chargeability="Philippines"))
+    store.save_client(blank)
+    store.save_client(client())
+    assert store.get_client(no_pd.id).missing == ["priority date"]
+
+    b = bull("2026-12", {"F4": {"ROW": "2008-01-01", "PHILIPPINES": "2006-01-01"},
+                         "F2A": {"ROW": "2023-01-01", "MEXICO": "2023-01-01"}})
+    prev = bull("2026-11", {"F4": {"ROW": "2007-01-01", "PHILIPPINES": "2005-01-01"},
+                            "F2A": {"ROW": "2021-01-01", "MEXICO": "2021-01-01"}})
+    a = evaluate.analyze(store.list_clients(), b, prev)
+    rows = {r.client.name: r for r in a.rows}
+    assert rows["Reyes, Ana"].final_action == evaluate.NEEDS_INFO
+    assert not rows["Reyes, Ana"].can_file_i485
+    assert rows["Garcia, Maria"].final_action == evaluate.IS_CURRENT
+    assert {ev.client.name for ev in a.events} == {"Garcia, Maria"}
+
+    from pdtracker import dashboard
+    html = dashboard.dashboard(a, [], lambda c: "", "", [prev, b], {}, "")
+    assert "Needs details" in html and "Add the priority date to check this client" in html
+    assert "Add the priority date, category and chargeability" in html
+    md = render.to_markdown("Office", a, history=[prev, b])
+    assert "Unnamed client" in md and "needs details: add the priority date" in md
+
+
+def test_web_form_saves_a_client_with_every_field_blank(tmp_path, settings):
+    from pdtracker import webui
+    settings.sqlite_path = str(tmp_path / "db.sqlite")
+    app = webui.App(settings)
+    form = {k: "" for k in ("name", "category", "chargeability", "priority_date", "beneficiary_dob", "case_type",
+                            "receipt_number", "responsible_email", "notes")}
+    status, _, redirect = app.handle("POST", "/client", {**form, "token": app.token})
+    assert status == 303 and "Still needed: priority date, category, chargeability" in redirect
+    assert "required" not in app.client_form()
+    c = app.store.list_clients()[0]
+    assert app.handle("GET", f"/client/{c.id}", {})[0] == 200
+    assert app.handle("GET", "/", {})[0] == 200
+
+
+def test_import_still_skips_incomplete_rows(tmp_path):
+    path = tmp_path / "in.csv"
+    path.write_text("name,category,chargeability,priority_date\nGarcia,F2A,Mexico,2022-01-01\nNo date,F2A,Mexico,\n,,,\n")
+    store = MemoryStore()
+    result = importers.sync(store, importers.CsvFeed(path))
+    assert result["added"] == 1 and len(result["errors"]) == 2
+    assert "missing priority date" in result["errors"][0]
+
+
+# updates for the desktop app
+
+class _Resp:
+    def __init__(self, data):
+        self.data = data
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self.data
+
+
+def test_update_check_offers_only_a_newer_installer():
+    from pdtracker import updates
+    release = {"tag_name": "v0.10.0", "html_url": "https://example.com/release",
+               "assets": [{"name": "PriorityDateTracker-NoInstall.zip", "browser_download_url": "zip"},
+                          {"name": "PriorityDateTracker-Setup.exe", "browser_download_url": "setup"}]}
+    get = lambda url, **kw: _Resp(release)
+    assert updates.check("0.9.3", "u", get) == {"version": "0.10.0", "url": "setup"}
+    assert updates.check("0.10.0", "u", get) is None
+    assert updates.check("0.2.0", "off", get) is None
+
+    def offline(url, **kw):
+        raise OSError("no network")
+    assert updates.check("0.2.0", "u", offline) is None
+
+
+def test_dashboard_shows_an_available_update(tmp_path, settings, monkeypatch):
+    from pdtracker import updates, webui
+    settings.sqlite_path = str(tmp_path / "db.sqlite")
+    app = webui.App(settings)
+    assert "Download the update" not in app.handle("GET", "/", {})[1]
+    monkeypatch.setattr(updates, "_latest", {"version": "9.0.0", "url": "https://example.com/setup.exe"})
+    page = app.handle("GET", "/", {})[1]
+    assert "Version 9.0.0" in page and "https://example.com/setup.exe" in page

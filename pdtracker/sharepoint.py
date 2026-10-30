@@ -77,7 +77,7 @@ class SharePointStore:
         try:
             return Client(
                 id=str(item["id"]), name=f.get("Title", ""), category=f.get("Category", ""),
-                chargeability=f.get("Chargeability", "ROW"), priority_date=self._date(f.get("PriorityDate")),
+                chargeability=f.get("Chargeability") or "", priority_date=self._date(f.get("PriorityDate")),
                 case_type=f.get("CaseType") or "", receipt_number=f.get("ReceiptNumber") or "",
                 beneficiary_dob=self._date(f.get("BeneficiaryDOB")),
                 responsible_email=f.get("ResponsibleEmail") or "", notes=f.get("Notes") or "",
@@ -85,7 +85,7 @@ class SharePointStore:
                 petitioner=f.get("Petitioner") or "", case_status=f.get("CaseStatus") or "",
                 attorney=f.get("Attorney") or "", outside_status=f.get("OutsideStatus") or "")
         except (ValueError, TypeError):
-            return None        # half-filled row; skipped rather than failing the whole run
+            return None        # unreadable row (an unknown category or a bad date); skipped rather than failing the run
 
     def _client_fields(self, c: Client) -> dict:
         return {

@@ -46,7 +46,7 @@ Choose one way. You can also mix them.
 
 Do this again whenever you want to bring in new cases. Clients already in the tracker are updated, not doubled.
 
-**By hand.** On the **Dashboard**, scroll to the bottom and click **Add a client**. Fill in the boxes and click **Save client**.
+**By hand.** On the **Dashboard**, scroll to the bottom and click **Add a client**. Fill in what you know and click **Save client**. Every box is optional, so you can save someone with only a name and finish later. Until a client has a priority date, a category and a chargeability country, the tracker lists them as **Needs details** instead of checking them against the bulletin. To finish one, click their name.
 
 ---
 
@@ -64,6 +64,18 @@ The new bulletin usually comes out in the middle of each month. From the 20th, t
 **Double-click the Priority Date Tracker icon** on your desktop (a blue calendar with a green check mark). You can also find it by pressing the Windows key and typing **Priority Date Tracker**.
 
 If the tracker is already open, double-clicking the icon just shows it again in your browser.
+
+---
+
+## Getting a new version
+
+When a new version is out, a box at the top of the **Dashboard** says so. To update:
+
+1. Click **Download the update** in that box.
+2. Open the file you downloaded and click through it, just like the first time you installed it (Part 1). If Windows shows the blue "Windows protected your PC" box again, click **More info**, then **Run anyway**.
+3. If the tracker was open, the installer closes it for you. When the installer finishes, the tracker opens again with the new version.
+
+Updating never touches your clients, bulletins or settings. They stay in your Documents folder.
 
 ---
 
@@ -102,5 +114,6 @@ Everything is in a folder called **Priority Date Tracker** inside your **Documen
 - **Setting up many computers.** These environment variables skip or change the first-run steps: `PDTRACKER_OFFICE_NAME` (no name question), `PDTRACKER_HOME` (use another folder, for example a synced one) and `PDTRACKER_PORT` (another port than 8765, when two offices share a computer).
 - **Automatic daily check.** `PriorityDateTracker.exe check` runs the same check as the button, without opening anything. To run it every morning, open the Command Prompt and paste:
   `schtasks /Create /SC DAILY /ST 09:00 /TN "Priority date check" /TR "\"%LOCALAPPDATA%\Programs\Priority Date Tracker\PriorityDateTracker.exe\" check"`
+- **Publishing an update.** Raise `__version__` in `pdtracker/__init__.py` and merge to main. GitHub builds the new installer and publishes it as the newest release. Each installed copy checks for a newer release when it opens and shows the download box. Installing it over the old copy keeps the office folder. Set `PDTRACKER_UPDATE_URL` to another GitHub `releases/latest` API address to follow your own copy of the project, or to `off` to turn the check off. Version 0.1.0 had no update check, so a computer that installed 0.1.0 needs the newer installer run on it once by hand.
 - **Several staff sharing one client list** need the cloud version instead. See [cloud.md](cloud.md).
 - **Building it yourself.** GitHub builds the installer on every change (`.github/workflows/windows-app.yml`) and publishes it to the newest release. To build by hand on Windows: `pip install . pyinstaller`, `pyinstaller packaging/windows/pdtracker.spec`, then compile `packaging/windows/installer.iss` with Inno Setup.

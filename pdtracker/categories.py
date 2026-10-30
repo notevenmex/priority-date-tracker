@@ -89,5 +89,10 @@ def chargeability_column(country: str) -> str:
     return "ROW"
 
 
+def country_name(code: str) -> str:
+    """Display name of a chargeability column, or a plain note when it hasn't been entered."""
+    return COUNTRIES.get(code, code) if code else "Not entered"
+
+
 def is_family(category: str) -> bool:
     return category in FAMILY
