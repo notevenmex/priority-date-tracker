@@ -53,6 +53,8 @@ class Settings:
     webhook_url_env: str = ""
     # Import mapping: our field -> column header in the office's export
     import_columns: dict = field(default_factory=dict)
+    # Docketwise API (optional): the raw 'docketwise:' section, read by docketwise_api.ApiSettings
+    docketwise: dict = field(default_factory=dict)
 
     def resolve(self, path: str) -> Path:
         p = Path(path).expanduser()
@@ -132,6 +134,7 @@ def parse(raw: dict, base_dir: Path = Path(".")) -> Settings:
     s.email_responsible = bool(email.get("notify_responsible_attorney", True))
     s.webhook_url_env = alerts.get("webhook_url_env", "") or ""
     s.import_columns = dict((raw.get("import") or {}).get("columns") or {})
+    s.docketwise = dict(raw.get("docketwise") or {})
 
     if s.uses_365:
         for key in ("tenant_id", "client_id"):

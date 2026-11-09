@@ -35,7 +35,23 @@ You don't need to know anything about computers or programming to use it. Follow
 
 Choose one way. You can also mix them.
 
-**From Docketwise (fastest).**
+**Straight from Docketwise (if your firm has Docketwise API access).**
+
+Docketwise gives API access on request (email team@docketwise.com). They send your firm a **client ID** and a **client secret**. Keep the secret private: don't email it around or paste it into chats.
+
+The first time:
+
+1. In the tracker, click **Import clients** at the top.
+2. Under **Connect to Docketwise**, type the client ID and the client secret, and click **Continue**.
+3. Click **Sign in to Docketwise**. A new tab opens. Sign in if asked, then allow access.
+4. The new tab lands on a Postman page (Docketwise sends everyone there). That's expected. Click the address bar at the top of that tab, copy the whole address, and close the tab.
+5. Back in the tracker, paste the address into the box and click **Finish connecting**.
+
+The tracker saves the sign-in on this computer, for your Windows user only. It renews itself, so you only do this once.
+
+After that, click **Get clients from Docketwise** on the **Import clients** page whenever you want to bring in new cases. Clients already in the tracker are updated, not doubled. If some are missing information, the page lists them to fill in, the same as with an export.
+
+**From a Docketwise export.**
 
 1. In Docketwise, go to **Reports**, then **Matter Reports**.
 2. Add these columns to the report: **applicant**, **preference_category**, **priority_date** and **final_action_date_status**.
