@@ -56,3 +56,16 @@ import:
     beneficiary_dob: Beneficiary DOB
     responsible_email: Attorney Email
     external_id: Matter ID
+
+# Optional: read matters straight from Docketwise's API (needs API access from Docketwise).
+# Sign in once with 'pdtrack docketwise connect' or Import clients > Connect to Docketwise. The client ID
+# and secret are saved per Windows user outside this folder, or come from the environment variables below.
+docketwise:
+  # base_url: https://app.docketwise.com
+  # redirect_uri: https://www.getpostman.com/oauth2/callback   # what Docketwise registers by default
+  # scope: public write
+  # client_id_env: DOCKETWISE_CLIENT_ID
+  # client_secret_env: DOCKETWISE_CLIENT_SECRET
+  # fields:                       # only if 'pdtrack docketwise fields' shows different names
+  #   category: preference_category.name
+  #   chargeability: beneficiary.country_of_birth

@@ -7,6 +7,7 @@ per-run token, and requests whose Host isn't localhost are refused.
 from __future__ import annotations
 
 import html
+import os
 import secrets
 import threading
 import webbrowser
@@ -34,6 +35,7 @@ class App:
         self.token = secrets.token_urlsafe(16)
         self.lock = threading.Lock()
         self.pending: list[docketwise.Matter] = []     # matters from the last upload still missing information
+        self.dw_state = ""                              # the Docketwise sign-in in progress, if any
 
     def page(self, title: str, body: str, message: str = "", active: str = "", kind: str = "") -> str:
         return dashboard.shell(title, self.s.office_name, body, active, message, kind)
@@ -87,6 +89,65 @@ class App:
         back = "<p><a href='/#profiles'>← All clients</a></p>"
         return back + top + self.panel(f"Edit {c.name}", self.client_form(c))
 
+    def _dw(self):
+        from . import docketwise_api as api
+        settings = api.ApiSettings.from_raw(self.s.docketwise)
+        return api, settings, api.Credentials(api.credentials_path(settings, self.s.office_name), settings)
+
+    def docketwise_panel(self) -> str:
+        api, settings, creds = self._dw()
+        if creds.connected:
+            return self.panel("Docketwise", (
+                f"<form method='post' action='/docketwise/sync' class='filters'>{self._hidden()}"
+                "<button>Get clients from Docketwise</button></form>"
+                "<p class='muted small'>Reads your matters straight from Docketwise and keeps the green card matters "
+                "that wait on the Visa Bulletin. Clients already here are updated, not duplicated.</p>"
+                f"<form method='post' action='/docketwise/disconnect'>{self._hidden()}"
+                "<button class='link'>Disconnect this computer from Docketwise</button></form>"))
+        if self.dw_state:
+            paste = "" if api.is_local_redirect(settings) else (
+                f"<form method='post' action='/docketwise/finish'>{self._hidden()}"
+                "<p>2. After you sign in and allow access, your browser lands on another page. Copy the whole address "
+                "from the address bar and paste it here:</p>"
+                "<div class='filters'><input type='text' name='address' required style='flex:1' "
+                "aria-label='Address after signing in'> <button>Finish connecting</button></div></form>")
+            url = api.authorize_url(settings, creds, self.dw_state)
+            return self.panel("Connect to Docketwise", (
+                f"<p>1. <a class='btn' href='{_e(url)}' target='_blank' rel='noopener'>Sign in to Docketwise</a></p>"
+                + paste))
+        need_id = not os.environ.get(settings.client_id_env)
+        need_secret = not os.environ.get(settings.client_secret_env)
+        fields = ""
+        if need_id:
+            fields += (f"<label>Client ID<input type='text' name='client_id' value='{_e(creds.client_id)}' "
+                       "autocomplete='off' required></label>")
+        if need_secret:
+            keep = " (leave blank to keep the saved one)" if creds.client_secret else ""
+            fields += (f"<label>Client secret{keep}<input type='password' name='client_secret' autocomplete='off'"
+                       f"{'' if creds.client_secret else ' required'}></label>")
+        return self.panel("Connect to Docketwise", (
+            f"<form method='post' action='/docketwise/start'>{self._hidden()}<div class='form-grid'>{fields}</div>"
+            "<div><button>Continue</button></div></form>"
+            "<p class='muted small'>Use the client ID and secret Docketwise emailed your firm. They're saved on this "
+            "computer only, for this Windows user, and never leave it except to sign in to Docketwise.</p>"))
+
+    def docketwise_sync(self) -> str:
+        from . import docketwise_api as api_mod
+        api, settings, creds = self._dw()
+        matters = api_mod.read(api.Client(settings, creds), settings.fields)
+        return self._imported(matters, "Docketwise")
+
+    def _is_dw_callback(self, path: str) -> bool:
+        api, settings, _ = self._dw()
+        return api.is_local_redirect(settings) and urlparse(path).path == (urlparse(settings.redirect_uri).path or "/")
+
+    def docketwise_finish(self, address: str) -> str:
+        api, settings, creds = self._dw()
+        code = api.code_from_redirect(address, self.dw_state)
+        api.exchange_code(settings, creds, code)
+        self.dw_state = ""
+        return "Connected to Docketwise. Use Get clients from Docketwise to bring your matters in."
+
     def import_page(self, message="", kind="") -> str:
         upload = self.panel("Upload a Docketwise matters export", (
             f"<form method='post' action='/import/docketwise' enctype='multipart/form-data' class='filters'>{self._hidden()}"
@@ -100,7 +161,8 @@ class App:
             "<p class='muted small'>Columns: name, category, chargeability, priority_date, and optionally case_type, "
             "receipt_number, petitioner, case_status, attorney, notes, external_id. The spreadsheet from "
             "“Download as a spreadsheet” is already in this layout.</p>"))
-        return self.page("Import clients", self.worklist() + upload + generic, message, "import", kind)
+        return self.page("Import clients", self.worklist() + self.docketwise_panel() + upload + generic,
+                         message, "import", kind)
 
     def worklist(self) -> str:
         todo = [m for m in self.pending if m.kind == docketwise.PREFERENCE and not m.complete]
@@ -152,11 +214,14 @@ class App:
             path = Path(d) / "export.csv"
             path.write_bytes(upload[1])
             matters = docketwise.read(path, self.s.import_columns)
+        return self._imported(matters, "the export")
+
+    def _imported(self, matters, where: str) -> str:
         result = docketwise.sync(self.store, matters)
         self.pending = matters
         n = docketwise.summary(matters)
         left = n["preference"] - n["complete"]
-        return (f"{n['preference']} clients wait on the Visa Bulletin. Also in the export: immediate relatives "
+        return (f"{n['preference']} clients wait on the Visa Bulletin. Also in {where}: immediate relatives "
                 f"({n['immediate']}), finished cases ({n['finished']}) and other matter types ({n['other']}). "
                 f"Added {result['added']} and updated {result['updated']} clients. "
                 + (f"{left} need a priority date, category or chargeability before they can be tracked." if left else ""))
@@ -291,6 +356,8 @@ class App:
                         return 200, self.report(), None
                     if parts == ["import"]:
                         return 200, self.import_page(query.get("msg", "")), None
+                    if self.dw_state and self._is_dw_callback(path):
+                        return 303, "", "/import?msg=" + self.docketwise_finish(path)
                     if len(parts) == 2 and parts[0] == "client":
                         c = self.store.get_client(parts[1])
                         if c:
@@ -329,6 +396,21 @@ class App:
                     return 303, "", f"/?msg=Read the {b.month} bulletin from {name}. {result.summary}"
                 if parts == ["import", "docketwise"]:
                     return 303, "", "/import?msg=" + self.import_docketwise(form)
+                if parts == ["docketwise", "start"]:
+                    api, settings, creds = self._dw()
+                    creds.set_client(form.get("client_id", ""), form.get("client_secret", ""))
+                    creds.need_client()
+                    creds.save()
+                    self.dw_state = api.new_state()
+                    return 303, "", "/import"
+                if parts == ["docketwise", "finish"]:
+                    return 303, "", "/import?msg=" + self.docketwise_finish(form.get("address", ""))
+                if parts == ["docketwise", "sync"]:
+                    return 303, "", "/import?msg=" + self.docketwise_sync()
+                if parts == ["docketwise", "disconnect"]:
+                    self._dw()[2].forget()
+                    self.dw_state = ""
+                    return 303, "", "/import?msg=Disconnected from Docketwise. The saved sign-in was removed."
                 if parts == ["import", "finish"]:
                     return 303, "", "/import?msg=" + self.finish_pending(form)
                 if parts == ["import", "csv"]:

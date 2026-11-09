@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 from . import config, importers, tracker
 from .bulletin import BulletinError, load_bulletin_file
+from .docketwise_api import DocketwiseError
 from .categories import CATEGORIES, COUNTRIES, country_name
 from .graph import GraphError
 from .models import CHARTS, Bulletin, Client, month_key
@@ -72,20 +74,79 @@ def cmd_list(s, a):
 def cmd_import_docketwise(s, a):
     from . import docketwise
     matters = docketwise.read(a.file, s.import_columns)
-    n = docketwise.summary(matters)
-    result = docketwise.sync(_store(s), matters)
-    print(f"{n['preference']} clients wait on the Visa Bulletin. Also in the export: {n['immediate']} immediate "
+    _print_import(docketwise.summary(matters), docketwise.sync(_store(s), matters), matters, a.worklist)
+
+
+def _dw(s):
+    from . import docketwise_api as api
+    settings = api.ApiSettings.from_raw(s.docketwise)
+    return api, settings, api.Credentials(api.credentials_path(settings, s.office_name), settings)
+
+
+def _print_import(n: dict, result: dict, matters, worklist) -> None:
+    from . import docketwise
+    print(f"{n['preference']} clients wait on the Visa Bulletin. Also found: {n['immediate']} immediate "
           f"relatives (nothing to track), {n['finished']} finished cases, {n['other']} other matter types.")
     print(f"Added {result['added']}, updated {result['updated']}.")
     left = n["preference"] - n["complete"]
     if left:
         missing = ", ".join(f"{v} without a {k}" for k, v in n["missing"].items() if v)
         print(f"{left} still need information ({missing}).")
-        if a.worklist:
-            docketwise.write_worklist(matters, a.worklist)
-            print(f"Fill in {a.worklist} and load it with: pdtrack import {a.worklist}")
+        if worklist:
+            docketwise.write_worklist(matters, worklist)
+            print(f"Fill in {worklist} and load it with: pdtrack import {worklist}")
         else:
             print("Add --worklist FILE to get them as a spreadsheet to fill in.")
+
+
+def cmd_docketwise(s, a):
+    import getpass
+    import webbrowser
+    from . import docketwise
+    api, settings, creds = _dw(s)
+    if a.dw_command == "connect":
+        if not os.environ.get(settings.client_id_env):
+            entered = input(f"Docketwise client ID{' (Enter keeps the saved one)' if creds.client_id else ''}: ")
+            creds.set_client(entered, "")
+        if not os.environ.get(settings.client_secret_env):
+            entered = getpass.getpass("Docketwise client secret (hidden as you type"
+                                      f"{'; Enter keeps the saved one' if creds.client_secret else ''}): ")
+            creds.set_client("", entered)
+        creds.need_client()
+        creds.save()
+        state = api.new_state()
+        url = api.authorize_url(settings, creds, state)
+        print("Sign in to Docketwise in the browser window that opens. If none opens, go to:")
+        print(url)
+        webbrowser.open(url)
+        if api.is_local_redirect(settings):
+            print("Waiting for Docketwise to send you back here...")
+            code = api.wait_for_code(settings, state)
+        else:
+            print("After you sign in and allow access, the browser lands on another page.")
+            code = api.code_from_redirect(input("Copy the whole address from the browser's address bar and paste it here: "),
+                                          state)
+        api.exchange_code(settings, creds, code)
+        print(f"Connected to Docketwise. The sign-in is saved for this Windows user in {creds.path}")
+    elif a.dw_command == "status":
+        if not creds.connected:
+            print("Not connected to Docketwise. Run: pdtrack docketwise connect")
+        else:
+            import datetime as dt
+            exp = dt.datetime.fromtimestamp(creds.data.get("expires_at", 0)).date()
+            print(f"Connected to Docketwise (sign-in saved in {creds.path}; renews itself before {exp}).")
+    elif a.dw_command == "fields":
+        matters = api.Client(settings, creds).matters()
+        print(f"{len(matters)} matters. Field names and types (no client data):")
+        for name, kind in api.field_names(matters).items():
+            print(f"  {name:45} {kind}")
+    elif a.dw_command == "sync":
+        matters = api.read(api.Client(settings, creds), settings.fields)
+        n = docketwise.summary(matters)
+        _print_import(n, docketwise.sync(_store(s), matters), matters, a.worklist)
+    elif a.dw_command == "disconnect":
+        creds.forget()
+        print("Removed the saved Docketwise sign-in, client ID and secret from this computer.")
 
 
 def cmd_import(s, a):
@@ -236,6 +297,14 @@ def main(argv=None):
     dw = sub.add_parser("import-docketwise", help="read a Docketwise matters export (Matters tab or Matter Report)")
     dw.add_argument("file")
     dw.add_argument("--worklist", help="write matters still missing information to this CSV")
+    dwa = sub.add_parser("docketwise", help="read matters straight from Docketwise's API")
+    dws = dwa.add_subparsers(dest="dw_command", required=True)
+    dws.add_parser("connect", help="save the firm's client ID and secret and sign in to Docketwise")
+    dws.add_parser("status", help="say whether this computer is connected")
+    dws.add_parser("fields", help="list the field names in your matters (no client data), to check the mapping")
+    dsy = dws.add_parser("sync", help="add or update clients from Docketwise's matters")
+    dsy.add_argument("--worklist", help="write matters still missing information to this CSV")
+    dws.add_parser("disconnect", help="remove the saved sign-in, client ID and secret from this computer")
     ex = sub.add_parser("export", help="write all clients to a CSV")
     ex.add_argument("file")
 
@@ -273,7 +342,7 @@ def main(argv=None):
     a = p.parse_args(argv)
     handlers = {
         "add": cmd_add, "edit": cmd_edit, "remove": cmd_remove, "list": cmd_list, "import": cmd_import,
-        "import-docketwise": cmd_import_docketwise, "export": cmd_export, "check": cmd_check, "report": cmd_report, "serve": cmd_serve,
+        "import-docketwise": cmd_import_docketwise, "docketwise": cmd_docketwise, "export": cmd_export, "check": cmd_check, "report": cmd_report, "serve": cmd_serve,
         "provision-sharepoint": cmd_provision, "codes": cmd_codes,
     }
     bulletin_handlers = {"fetch": cmd_bulletin_fetch, "template": cmd_bulletin_template, "load": cmd_bulletin_load,
@@ -286,7 +355,7 @@ def main(argv=None):
         s = config.load(a.config)
         handler = bulletin_handlers[a.bulletin_command] if a.command == "bulletin" else handlers[a.command]
         handler(s, a)
-    except (config.ConfigError, GraphError, BulletinError, ValueError, OSError) as err:
+    except (config.ConfigError, GraphError, BulletinError, DocketwiseError, ValueError, OSError) as err:
         print(f"error: {err}", file=sys.stderr)
         return 1
     return 0

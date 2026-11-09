@@ -11,7 +11,7 @@ a = Analysis(
     [str(HERE / "launch.py")],
     pathex=[str(ROOT)],
     datas=[(str(ROOT / "pdtracker" / "demo" / "*.pdf"), "pdtracker/demo")],
-    hiddenimports=["pdtracker.webui", "pdtracker.docketwise", "pdtracker.sharepoint", "msal", "tzdata"],
+    hiddenimports=["pdtracker.webui", "pdtracker.docketwise", "pdtracker.docketwise_api", "pdtracker.sharepoint", "msal", "tzdata"],
     excludes=["tkinter", "pytest", "reportlab"],
 )
 pyz = PYZ(a.pure)

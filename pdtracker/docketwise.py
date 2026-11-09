@@ -125,7 +125,12 @@ class Matter:
     @property
     def key(self) -> str:
         """Stable id for re-imports: Docketwise's own id when exported, else applicant and matter title."""
-        return self.external_id or f"docketwise:{self.applicant}|{self.title}"
+        return self.external_id or self.name_key
+
+    @property
+    def name_key(self) -> str:
+        """The id an export without Docketwise ids gave this matter, so an API sync updates those clients."""
+        return f"docketwise:{self.applicant}|{self.title}"
 
     @property
     def complete(self) -> bool:
@@ -246,33 +251,38 @@ def _same_person(a: str, b: str) -> bool:
 
 
 def read(path: str | Path, columns: dict | None = None) -> list[Matter]:
+    with Path(path).open(newline="", encoding="utf-8-sig") as f:
+        return read_rows(csv.DictReader(f), columns)
+
+
+def read_rows(rows, columns: dict | None = None, first_row: int = 2) -> list[Matter]:
+    """Sort matters given as export rows (header -> text). The API reader builds the same rows."""
     columns = columns or {}
     matters = []
-    with Path(path).open(newline="", encoding="utf-8-sig") as f:
-        for n, raw in enumerate(csv.DictReader(f), start=2):
-            title = _pick(raw, "title", columns)
-            if not title:
-                continue
-            client = _pick(raw, "client", columns)
-            applicant = _pick(raw, "applicant", columns) or applicant_from_title(title)
-            note = ""
-            if not applicant:                   # e.g. "465 Labor Cert": the contact is the applicant
-                applicant, client = client or title, ""
-                note = "applicant name taken from the Docketwise contact, not the matter title"
-            m = Matter(row=n, title=title, applicant=applicant, updated=_updated(_pick(raw, "updated", columns)),
-                       petitioner=client, description=_pick(raw, "description", columns),
-                       type=_pick(raw, "type", columns), status=_pick(raw, "status", columns),
-                       outside_status=_pick(raw, "outside_status", columns), attorney=_pick(raw, "attorney", columns),
-                       receipt_number=_pick(raw, "receipt_number", columns) or _receipt(_pick(raw, "receipts", columns)),
-                       external_id=_pick(raw, "external_id", columns),
-                       archived=_pick(raw, "archived", columns).lower() == "true")
-            m.outside_status = {"not current": "Not current", "current": "Current"}.get(m.outside_status.lower(), "")
-            if note:
-                m.notes.append(note)
-            if _same_person(m.petitioner, m.applicant):
-                m.petitioner = ""               # the "client" is the applicant themself
-            _classify(m, raw, columns)
-            matters.append(m)
+    for n, raw in enumerate(rows, start=first_row):
+        title = _pick(raw, "title", columns)
+        if not title:
+            continue
+        client = _pick(raw, "client", columns)
+        applicant = _pick(raw, "applicant", columns) or applicant_from_title(title)
+        note = ""
+        if not applicant:                   # e.g. "465 Labor Cert": the contact is the applicant
+            applicant, client = client or title, ""
+            note = "applicant name taken from the Docketwise contact, not the matter title"
+        m = Matter(row=n, title=title, applicant=applicant, updated=_updated(_pick(raw, "updated", columns)),
+                   petitioner=client, description=_pick(raw, "description", columns),
+                   type=_pick(raw, "type", columns), status=_pick(raw, "status", columns),
+                   outside_status=_pick(raw, "outside_status", columns), attorney=_pick(raw, "attorney", columns),
+                   receipt_number=_pick(raw, "receipt_number", columns) or _receipt(_pick(raw, "receipts", columns)),
+                   external_id=_pick(raw, "external_id", columns),
+                   archived=_pick(raw, "archived", columns).lower() == "true")
+        m.outside_status = {"not current": "Not current", "current": "Current"}.get(m.outside_status.lower(), "")
+        if note:
+            m.notes.append(note)
+        if _same_person(m.petitioner, m.applicant):
+            m.petitioner = ""               # the "client" is the applicant themself
+        _classify(m, raw, columns)
+        matters.append(m)
     matters = [m for m in _merge_people(matters) if not m.archived]   # closed unless the person has an open matter
     link_derivatives(matters)
     return matters
@@ -455,7 +465,7 @@ def sync(store, matters: list[Matter]) -> dict:
         if not m.complete:
             continue
         c = m.client()
-        match = existing.get(c.external_id)
+        match = existing.get(c.external_id) or existing.get(m.name_key)
         if match:
             c.id, c.active, c.beneficiary_dob = match.id, match.active, match.beneficiary_dob
             c.responsible_email = match.responsible_email
@@ -466,4 +476,4 @@ def sync(store, matters: list[Matter]) -> dict:
     return {"added": added, "updated": updated}
 
 
-__all__ = ["read", "summary", "write_worklist", "sync", "Matter", "CATEGORIES"]
+__all__ = ["read", "read_rows", "summary", "write_worklist", "sync", "Matter", "CATEGORIES"]
